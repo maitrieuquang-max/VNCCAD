@@ -18,7 +18,27 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["vnc", "chuyenma"])
             .params("{encoding?: \"auto\" (by text style font) | \"tcvn3\" | \"tcvn3h\" (capital-only fonts) | \"vni\", handles?: forced encodings act on these or the selection, else on every object}")
             .enabled(always),
+        CommandSpec::new("shxfonts", "SHX Fonts", run_shxfonts)
+            .menu(&["Tools", "Vietnamese", "SHX Fonts"])
+            .params("{} → the SHX fonts loaded and the folders searched")
+            .enabled(always)
+            .noundo(),
     ]
+}
+
+fn run_shxfonts(s: &mut Session, _p: &Value) -> Result<Value> {
+    let fonts = cadcraft_fonts::shx::known();
+    #[cfg(not(target_arch = "wasm32"))]
+    let dirs: Vec<String> = cadcraft_fonts::shx::font_dirs().iter().map(|d| d.display().to_string()).collect();
+    #[cfg(target_arch = "wasm32")]
+    let dirs: Vec<String> = Vec::new();
+    let msg = if fonts.is_empty() {
+        "Chưa nạp font SHX nào. Đặt file .shx cạnh bản vẽ, trong thư mục VNCCad/fonts, hoặc kéo-thả file .shx vào cửa sổ.".to_string()
+    } else {
+        format!("Font SHX đã nạp: {}", fonts.join(", "))
+    };
+    s.echo(msg.clone());
+    Ok(json!({ "fonts": fonts, "dirs": dirs, "message": msg }))
 }
 
 /// One line for the command line, in Vietnamese.

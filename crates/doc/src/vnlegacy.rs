@@ -45,15 +45,63 @@ fn stem(font: &str) -> String {
     .to_string()
 }
 
+/// Families of the TCVN3 (ABC) font set, as file stems without the leading "vn".
+const TCVN3_FAMILIES: [&str; 40] = [
+    "time",
+    "arial",
+    "helve",
+    "cour",
+    "book",
+    "bodoni",
+    "clarendon",
+    "century",
+    "aristote",
+    "avant",
+    "lucida",
+    "switzer",
+    "shelley",
+    "monotype",
+    "park",
+    "universe",
+    "bangkok",
+    "cooper",
+    "free",
+    "goud",
+    "linus",
+    "mystical",
+    "present",
+    "revue",
+    "south",
+    "stamp",
+    "teknical",
+    "thuphap",
+    "tifani",
+    "vogue",
+    "bahamas",
+    "black",
+    "brush",
+    "commercial",
+    "comic",
+    "frankfurt",
+    "garamond",
+    "souvenir",
+    "tahoma",
+    "verdana",
+];
+
 /// The legacy encoding a font name implies, if any.
+///
+/// TCVN3 typefaces start with a dot (".VnTime", ".VnArial NarrowH"); their files are
+/// "vntime.ttf", "vnarialh.ttf"… VNI typefaces and files start with "VNI".
 pub fn legacy_of_font(font: &str) -> Option<Legacy> {
     let s = stem(font);
-    if s.starts_with("vni") {
+    if s.starts_with("vni-") || s.starts_with("vni ") || s.starts_with("vni_") || (s.starts_with("vni") && s.len() <= 12) {
         return Some(Legacy::Vni);
     }
-    if s.starts_with("vn") && s.len() > 3 {
-        let upper = s.ends_with('h');
-        return Some(Legacy::Tcvn3 { upper });
+    let dotted = font.trim().starts_with(".vn") || font.trim().starts_with(".Vn") || font.trim().starts_with(".VN");
+    let known = s.strip_prefix("vn").is_some_and(|rest| TCVN3_FAMILIES.iter().any(|f| rest.starts_with(f)));
+    if dotted || known {
+        return Some(Legacy::Tcvn3 { upper: s.ends_with('h') });
     }
     None
 }
@@ -565,6 +613,10 @@ mod tests {
         assert_eq!(legacy_of_font("VNI-HELVE.TTF"), Some(Legacy::Vni));
         assert_eq!(legacy_of_font("arial.ttf"), None);
         assert_eq!(legacy_of_font("romans.shx"), None);
+        assert_eq!(legacy_of_font("vnccadtest.shx"), None);
+        assert_eq!(legacy_of_font("vnc-logo.ttf"), None);
+        assert_eq!(legacy_of_font(".VnArial NarrowH"), Some(Legacy::Tcvn3 { upper: true }));
+        assert_eq!(legacy_of_font("VNHELVETINS.TTF"), Some(Legacy::Tcvn3 { upper: false }));
         assert_eq!(unicode_font_for(".VnTime"), "Times New Roman");
         assert_eq!(unicode_font_for("VNI-Helve"), "Arial");
     }

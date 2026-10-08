@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod mtext;
+pub mod shx;
 mod stroke;
 pub mod ttf;
 
@@ -153,12 +154,22 @@ pub enum TextFont {
     #[default]
     Stroke,
     Outline(Arc<Vec<u8>>),
+    /// A compiled shape font (`.shx`) found on this computer or registered at run time.
+    Shx(Arc<shx::ShxFont>),
 }
 
 impl TextFont {
     /// Resolve a text style font name: an installed TTF/OTF when found, else the stroke font.
     pub fn resolve(name: &str) -> TextFont {
-        ttf::find(name).map(TextFont::Outline).unwrap_or(TextFont::Stroke)
+        let lower = name.trim().to_ascii_lowercase();
+        if lower.ends_with(".shx") {
+            return shx::find(&lower).map(TextFont::Shx).unwrap_or(TextFont::Stroke);
+        }
+        if let Some(b) = ttf::find(name) {
+            return TextFont::Outline(b);
+        }
+        // A bare name ("romans", "txt") may be an SHX font.
+        shx::find(&lower).map(TextFont::Shx).unwrap_or(TextFont::Stroke)
     }
     pub fn is_outline(&self) -> bool {
         matches!(self, TextFont::Outline(_))
@@ -242,6 +253,9 @@ pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, obli
     {
         return sh;
     }
+    if let TextFont::Shx(f) = font {
+        return shx::shape(f, s, height, width_factor, oblique);
+    }
     let run = layout_line(s, height, width_factor, oblique);
     Shaped { strokes: run.strokes, glyphs: Vec::new(), width: run.width }
 }
@@ -252,6 +266,9 @@ pub fn text_width(font: &TextFont, s: &str, height: f64, width_factor: f64) -> f
         && let Some(w) = ttf::width(bytes, s, height, width_factor)
     {
         return w;
+    }
+    if let TextFont::Shx(f) = font {
+        return shx::width(f, s, height, width_factor);
     }
     line_width(s, height, width_factor)
 }

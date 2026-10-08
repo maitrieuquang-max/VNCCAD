@@ -55,7 +55,7 @@ mod web {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
         let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
         input.set_type("file");
-        input.set_accept(".dxf,.dwg,.DXF,.DWG");
+        input.set_accept(".dxf,.dwg,.shx,.DXF,.DWG,.SHX");
         let (inbox, ctx, picker) = (inbox.clone(), ctx.clone(), input.clone());
         let on_change = Closure::once_into_js(move || {
             let Some(file) = picker.files().and_then(|f| f.get(0)) else { return };

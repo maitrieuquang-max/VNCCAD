@@ -67,6 +67,18 @@ fn file_name(path: &str) -> String {
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
+    // VNCCad: a dropped or opened .shx is a font to load, not a drawing.
+    if name.to_ascii_lowercase().ends_with(".shx") {
+        let fname = file_name(name);
+        if !cadcraft_fonts::shx::register(&fname, bytes) {
+            return Err(bad("open", format!("{fname}: không phải font SHX hợp lệ")));
+        }
+        s.echo(format!("Đã nạp font SHX {fname}. Chữ dùng font này sẽ hiển thị ở lần vẽ lại tiếp theo (REGEN)."));
+        for st in &mut s.docs {
+            st.revision += 1;
+        }
+        return Ok(s.active);
+    }
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let mut d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
     // VNCCad: text in legacy Vietnamese fonts (TCVN3 .VnTime…, VNI-Times…) becomes Unicode.
@@ -85,6 +97,10 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            // Fonts sent alongside the drawing (same folder or its fonts/ subfolder).
+            if let Some(dir) = std::path::Path::new(path).parent() {
+                cadcraft_fonts::shx::add_font_dir(dir);
+            }
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
         }
