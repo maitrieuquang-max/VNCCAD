@@ -59,7 +59,12 @@ trunk build --release        # kết quả trong dist/web
 trunk serve                  # chạy thử tại http://127.0.0.1:8771
 ```
 
-## Deploy bản web lên Vercel
+## Bản web trên GitHub Pages
+
+Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:
+**https://maitrieuquang-max.github.io/VNCCAD/**
+
+## Deploy bản web lên Vercel (tùy chọn)
 
 1. Giải nén artifact `vnccad-web` (hoặc lấy thư mục `dist/web`).
 2. Chạy `npx vercel deploy --prod` trong thư mục đó, hoặc kéo-thả thư mục vào vercel.com → Add New → Project.
