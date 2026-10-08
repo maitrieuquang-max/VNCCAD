@@ -1,0 +1,92 @@
+# VNCCad: build the web (offline-capable PWA) and Windows/Linux desktop versions on every push
+# to the vnccad branch, or on demand from the Actions tab. Download the results from the run's
+# "Artifacts" section. Nothing here is signed and no secrets are used.
+name: VNCCad build
+
+on:
+  push:
+    branches: [vnccad, main]
+  workflow_dispatch:
+
+env:
+  TRUNK_VERSION: 0.21.14
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    name: Web (WebAssembly + PWA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vnccad-web
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+      - name: Build
+        working-directory: apps/cadcraft-web
+        run: trunk build --release
+      - name: Add hosting files
+        run: |
+          cp packaging/web/_headers dist/web/
+          cp packaging/web/vercel.json dist/web/
+          ls -la dist/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vnccad-web
+          path: dist/web
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 (portable)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vnccad-windows
+      - name: Build
+        run: cargo build --release -p cadcraft -p cadcraft-cli
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out/VNCCad
+          cp target/release/cadcraft.exe out/VNCCad/VNCCad.exe
+          cp target/release/cadcraft-cli.exe out/VNCCad/vnccad-cli.exe
+          cp LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md VNCCAD.md out/VNCCad/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vnccad-windows-x64
+          path: out/VNCCad
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vnccad-linux
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev
+      - name: Build
+        run: cargo build --release -p cadcraft -p cadcraft-cli
+      - name: Collect
+        run: |
+          mkdir -p out/VNCCad
+          cp target/release/cadcraft out/VNCCad/vnccad
+          cp target/release/cadcraft-cli out/VNCCad/vnccad-cli
+          cp LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md VNCCAD.md out/VNCCad/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vnccad-linux-x86_64
+          path: out/VNCCad
+          if-no-files-found: error
