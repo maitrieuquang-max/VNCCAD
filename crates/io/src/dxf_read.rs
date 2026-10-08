@@ -748,7 +748,11 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let gen_flags = t.i(71).unwrap_or(0);
                 let st = TextStyle {
                     name: name.clone(),
-                    font: t.s(3).unwrap_or_default(),
+                    // TrueType styles may leave code 3 empty and name the typeface in ACAD xdata.
+                    font: t
+                        .s(3)
+                        .filter(|f| !f.trim().is_empty())
+                        .unwrap_or_else(|| crate::dxf_ext::xdata(&tg, "ACAD").iter().find(|x| x.code == 1000).map(Tag::str).unwrap_or_default()),
                     big_font: t.s(4).unwrap_or_default(),
                     height: t.fd(40, 0.0),
                     width_factor: t.fd(41, 1.0),

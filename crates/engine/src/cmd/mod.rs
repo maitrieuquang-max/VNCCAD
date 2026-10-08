@@ -21,6 +21,7 @@ mod settings;
 mod table;
 mod utility;
 mod view;
+pub mod vn;
 
 pub mod curves;
 pub mod helpers;
@@ -165,6 +166,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(inquiry::specs());
         v.extend(settings::specs());
         v.extend(utility::specs());
+        v.extend(vn::specs());
         v.extend(table::specs());
         v.extend(constraints::specs());
         v

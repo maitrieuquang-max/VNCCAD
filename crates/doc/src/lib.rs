@@ -13,6 +13,7 @@ mod header;
 pub mod library;
 mod store;
 mod tables;
+pub mod vnlegacy;
 
 use std::collections::BTreeMap;
 

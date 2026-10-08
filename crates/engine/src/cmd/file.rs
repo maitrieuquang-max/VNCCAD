@@ -68,8 +68,14 @@ fn file_name(path: &str) -> String {
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
-    let d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
-    Ok(s.open_drawing(d, &file_name(name), path))
+    let mut d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
+    // VNCCad: text in legacy Vietnamese fonts (TCVN3 .VnTime…, VNI-Times…) becomes Unicode.
+    let vn = cadcraft_doc::vnlegacy::convert_drawing(&mut d);
+    let i = s.open_drawing(d, &file_name(name), path);
+    if vn.texts > 0 || !vn.styles.is_empty() {
+        s.echo(super::vn::report_text(&vn));
+    }
+    Ok(i)
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
