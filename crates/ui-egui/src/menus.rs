@@ -11,6 +11,7 @@ pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools"
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.open", "Open...", &[], Some("Cmd+O")),
+    ("ui.road", "Road & Bridge Tools...", &["Tools", "Road & Bridge Tools..."], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
@@ -100,6 +101,20 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
                 return Some(app.session.execute("saveas", &json!({ "path": p })).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
+        }
+        "ui.road" => {
+            app.ui.road = Some(app.ui.road.take().unwrap_or_default());
+            Ok(Value::Null)
+        }
+        "tracdoc" | "td" | "tracngang" | "tn" | "bangkl" if params.is_null() => {
+            let mut d = app.ui.road.take().unwrap_or_default();
+            d.tab = match id {
+                "tracngang" | "tn" => 1,
+                "bangkl" => 2,
+                _ => 0,
+            };
+            app.ui.road = Some(d);
+            return Some(Ok(Value::Null));
         }
         "xattach" | "xa" if params.is_null() => {
             if app.services.request_open.is_some() {

@@ -236,7 +236,6 @@ fn run_xattach(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let h = d.add(&space, Common { layer, ..Common::default() }, EntityKind::Insert(ins)).map_err(|e| bad("xattach", e.to_string()))?;
     let msg = format!("Đã gắn tham chiếu {name} ({n} đối tượng).");
-    s.echo(msg.clone());
     Ok(json!({ "handle": h.hex(), "name": name, "entities": n, "message": msg }))
 }
 
@@ -331,7 +330,6 @@ fn run_xref(s: &mut Session, p: &Value) -> Result<Value> {
                     .collect();
                 format!("Tham chiếu: {}", parts.join(", "))
             };
-            s.echo(msg.clone());
             return Ok(json!({ "xrefs": l, "message": msg }));
         }
         "reload" | "r" => {
@@ -365,7 +363,6 @@ fn run_xref(s: &mut Session, p: &Value) -> Result<Value> {
         }
         other => return Err(bad("xref", format!("unknown action `{other}` (list, reload, detach, bind)"))),
     };
-    s.echo(msg.clone());
     Ok(json!({ "message": msg }))
 }
 

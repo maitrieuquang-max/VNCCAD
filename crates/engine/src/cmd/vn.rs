@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn run_shxfonts(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_shxfonts(_s: &mut Session, _p: &Value) -> Result<Value> {
     let fonts = cadcraft_fonts::shx::known();
     #[cfg(not(target_arch = "wasm32"))]
     let dirs: Vec<String> = cadcraft_fonts::shx::font_dirs().iter().map(|d| d.display().to_string()).collect();
@@ -37,7 +37,6 @@ fn run_shxfonts(s: &mut Session, _p: &Value) -> Result<Value> {
     } else {
         format!("Font SHX đã nạp: {}", fonts.join(", "))
     };
-    s.echo(msg.clone());
     Ok(json!({ "fonts": fonts, "dirs": dirs, "message": msg }))
 }
 
@@ -64,7 +63,6 @@ fn run_vnconvert(s: &mut Session, p: &Value) -> Result<Value> {
         None => {
             let r = vnlegacy::convert_drawing(s.doc_mut()?);
             let msg = report_text(&r);
-            s.echo(msg.clone());
             Ok(json!({ "texts": r.texts, "styles": r.styles.len(), "message": msg }))
         }
         Some(enc) => {
@@ -75,7 +73,6 @@ fn run_vnconvert(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let n = vnlegacy::convert_entities(s.doc_mut()?, &hs, enc);
             let msg = format!("Đã chuyển {n} chuỗi chữ sang Unicode.");
-            s.echo(msg.clone());
             Ok(json!({ "texts": n, "message": msg }))
         }
     }

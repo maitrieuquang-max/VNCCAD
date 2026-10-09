@@ -81,7 +81,10 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
             s.new_drawing(true);
         }
         let reference = path.clone().unwrap_or(fname);
-        super::raster::run_pdfattach(s, &json!({ "path": reference }))?;
+        let r = super::raster::run_pdfattach(s, &json!({ "path": reference }))?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
         return Ok(s.active);
     }
     if cadcraft_io::raster::is_image_name(&lower) {
@@ -92,7 +95,10 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         }
         // Keep the full path on desktop so the drawing finds the file again.
         let reference = path.clone().unwrap_or(fname);
-        super::raster::run_imageattach(s, &json!({ "path": reference }))?;
+        let r = super::raster::run_imageattach(s, &json!({ "path": reference }))?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
         return Ok(s.active);
     }
     // VNCCad: a dropped or opened .shx is a font to load, not a drawing.

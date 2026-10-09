@@ -73,7 +73,6 @@ pub(crate) fn run_imageattach(s: &mut Session, p: &Value) -> Result<Value> {
     let name = raster::file_key(&path);
     let msg =
         if how.is_empty() { format!("Đã chèn ảnh {name} ({w}×{h} px).") } else { format!("Đã chèn ảnh {name} ({w}×{h} px) {how}.") };
-    s.echo(msg.clone());
     Ok(json!({ "handle": handle.hex(), "width": w, "height": h, "georeferenced": !how.is_empty(), "message": msg }))
 }
 
@@ -117,7 +116,6 @@ pub(crate) fn run_pdfattach(s: &mut Session, p: &Value) -> Result<Value> {
     let handle =
         s.doc_mut()?.add(&space, Common { layer, ..Common::default() }, EntityKind::Image(image)).map_err(|e| bad("pdfattach", e.to_string()))?;
     let msg = format!("Đã chèn trang {page}/{pages} của {} làm nền.", raster::file_key(&file));
-    s.echo(msg.clone());
     Ok(json!({ "handle": handle.hex(), "page": page, "pages": pages, "message": msg }))
 }
 
@@ -142,7 +140,6 @@ fn run_image_list(s: &mut Session, _p: &Value) -> Result<Value> {
     } else {
         format!("{} ảnh, thiếu {missing} file. Đặt file ảnh cạnh bản vẽ hoặc kéo-thả file ảnh vào cửa sổ.", out.len())
     };
-    s.echo(msg.clone());
     Ok(json!({ "images": out, "message": msg }))
 }
 

@@ -36,7 +36,11 @@ pub use control::{ControlRequest, ControlResponse};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    /// VNCCad: the road / bridge tools dialog (profile, sections, quantities, layers).
+    #[serde(skip)]
+    pub road: Option<RoadDialog>,
     /// VNCCad: the "attach an open drawing as a reference" chooser is showing.
+    #[serde(skip)]
     pub xattach_pick: bool,
     pub show_toolsets: bool,
     pub show_palettes: bool,
@@ -61,6 +65,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
+            road: None,
             xattach_pick: false,
             show_toolsets: true,
             show_palettes: true,
@@ -297,6 +302,7 @@ impl CadApp {
         dialogs::show(self, ui.ctx());
         autosave::recovery_dialog(self, ui.ctx());
         xattach_dialog(self, ui.ctx());
+        road_dialog(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 
@@ -367,6 +373,125 @@ impl CadApp {
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (screen locked or window hidden); use ui.render"}));
             false
         });
+    }
+}
+
+/// VNCCad: state of the road / bridge tools dialog.
+#[derive(Clone, Debug)]
+pub struct RoadDialog {
+    /// 0 profile, 1 cross sections, 2 quantity table, 3 layers.
+    pub tab: usize,
+    pub profile: String,
+    pub sections: String,
+    pub quantities: String,
+    pub hscale: f64,
+    pub vscale: f64,
+    pub xscale: f64,
+    pub columns: u32,
+    pub with_table: bool,
+}
+
+impl Default for RoadDialog {
+    fn default() -> Self {
+        RoadDialog {
+            tab: 0,
+            profile: "Tên cọc\tLý trình\tCao độ TN\tCao độ TK\nH0\tKm0+000\t10.25\t11.00\nC1\tKm0+025\t10.80\t11.20\nH1\tKm0+100\t11.60\t11.80\n"
+                .into(),
+            sections: "H0\tKm0+000\tTN\t-12\t10.1\t-4\t10.3\t0\t10.25\t5\t10.2\t12\t9.9\nH0\tKm0+000\tTK\t-7\t10.2\t-3.5\t11.0\t3.5\t11.0\t7\t10.1\n"
+                .into(),
+            quantities: "H0\tKm0+000\t0.00\t12.40\nH1\tKm0+100\t3.10\t6.80\n".into(),
+            hscale: 1000.0,
+            vscale: 100.0,
+            xscale: 200.0,
+            columns: 3,
+            with_table: true,
+        }
+    }
+}
+
+fn road_dialog(app: &mut CadApp, ctx: &egui::Context) {
+    let Some(mut st) = app.ui.road.clone() else { return };
+    let mut open = true;
+    let mut run: Option<(&'static str, serde_json::Value)> = None;
+    egui::Window::new("Công cụ cầu đường")
+        .open(&mut open)
+        .resizable(true)
+        .default_width(560.0)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for (i, t) in ["Trắc dọc", "Trắc ngang", "Bảng khối lượng", "Layer TCVN"].iter().enumerate() {
+                    if ui.selectable_label(st.tab == i, *t).clicked() {
+                        st.tab = i;
+                    }
+                }
+            });
+            ui.separator();
+            let editor = |ui: &mut egui::Ui, text: &mut String| {
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    ui.add(egui::TextEdit::multiline(text).code_editor().desired_rows(10).desired_width(f32::INFINITY));
+                });
+            };
+            match st.tab {
+                0 => {
+                    ui.label("Dán từ Excel: Tên cọc | Lý trình (Km0+100 hoặc 100) | Cao độ TN | Cao độ TK. Dòng tiêu đề được bỏ qua.");
+                    editor(ui, &mut st.profile);
+                    ui.horizontal(|ui| {
+                        ui.label("Tỷ lệ ngang 1/");
+                        ui.add(egui::DragValue::new(&mut st.hscale).range(10.0..=100_000.0));
+                        ui.label("đứng 1/");
+                        ui.add(egui::DragValue::new(&mut st.vscale).range(1.0..=100_000.0));
+                    });
+                    if ui.button("Vẽ trắc dọc").clicked() {
+                        run = Some(("tracdoc", json!({ "data": st.profile, "hscale": st.hscale, "vscale": st.vscale })));
+                    }
+                }
+                1 => {
+                    ui.label("Mỗi dòng một đường: Tên cọc | Lý trình | TN hoặc TK | k/c₁ | cao độ₁ | k/c₂ | cao độ₂ … (k/c âm bên trái tim).");
+                    editor(ui, &mut st.sections);
+                    ui.horizontal(|ui| {
+                        ui.label("Tỷ lệ 1/");
+                        ui.add(egui::DragValue::new(&mut st.xscale).range(10.0..=10_000.0));
+                        ui.label("Số cột");
+                        ui.add(egui::DragValue::new(&mut st.columns).range(1..=20));
+                        ui.checkbox(&mut st.with_table, "Kèm bảng khối lượng");
+                    });
+                    if ui.button("Vẽ trắc ngang").clicked() {
+                        run = Some(("tracngang", json!({ "data": st.sections, "scale": st.xscale, "columns": st.columns, "table": st.with_table })));
+                    }
+                }
+                2 => {
+                    ui.label("Tên cọc | Lý trình | F đào (m²) | F đắp (m²). Khối lượng tính theo mặt cắt trung bình.");
+                    editor(ui, &mut st.quantities);
+                    if ui.button("Tạo bảng khối lượng").clicked() {
+                        run = Some(("bangkl", json!({ "data": st.quantities })));
+                    }
+                }
+                _ => {
+                    ui.label("Tạo bộ layer đường và cầu với kiểu nét, độ dày nét theo TCVN 8-20:2002 (nét đậm 0,5 mm; nét mảnh 0,25/0,18 mm; tim/trục chấm gạch; cạnh khuất nét đứt).");
+                    ui.horizontal(|ui| {
+                        if ui.button("Layer đường").clicked() {
+                            run = Some(("vnlayers", json!({ "set": "duong" })));
+                        }
+                        if ui.button("Layer cầu").clicked() {
+                            run = Some(("vnlayers", json!({ "set": "cau" })));
+                        }
+                        if ui.button("Cả hai").clicked() {
+                            run = Some(("vnlayers", json!({ "set": "all" })));
+                        }
+                    });
+                }
+            }
+            ui.small("Kết quả và lỗi hiện ở dòng lệnh. Có thể hoàn tác bằng Undo.");
+        });
+    app.ui.road = if open { Some(st) } else { None };
+    if let Some((cmd, params)) = run {
+        if app.session.docs.is_empty() {
+            let _ = app.run("new", json!({ "metric": true }));
+            app.ui.start_tab = false;
+        }
+        if app.run(cmd, params).is_ok() && cmd != "vnlayers" {
+            app.canvas.zoom_pending = true;
+        }
     }
 }
 
