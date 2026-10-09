@@ -507,8 +507,9 @@ fn run_tracngang(s: &mut Session, p: &Value) -> Result<Value> {
             hi - lo
         })
         .fold(0.0, f64::max);
-    let row_h = 8.0 * k;
-    let cell_w = (omax - omin) + 50.0 * k;
+    let row_h = 11.0 * k;
+    // Room for the band's label column (30·k) plus a gap between sections.
+    let cell_w = (omax - omin) + 70.0 * k;
     let cell_h = dzmax + 2.0 + 3.0 * row_h + 30.0 * k;
     let (th, lh) = (2.0 * k, 3.5 * k);
     let mut g = Gen::default();
@@ -516,26 +517,32 @@ fn run_tracngang(s: &mut Session, p: &Value) -> Result<Value> {
     for (i, sec) in secs.iter().enumerate() {
         let (c, r) = (i % cols, i / cols);
         // Datum point of this section: centre-line x, datum y.
-        let cx = o.x + c as f64 * cell_w - omin + 25.0 * k;
+        let cx = o.x + c as f64 * cell_w - omin + 38.0 * k;
         let base_y = o.y - r as f64 * cell_h;
         let zlo = sec.ground.iter().chain(&sec.design).map(|q| q.1).fold(f64::MAX, f64::min);
         let datum = (zlo - 1.0).floor();
         let pt = |q: &(f64, f64)| Vec2::new(cx + q.0, base_y + (q.1 - datum));
         let lmin = sec.ground.first().map_or(0.0, |q| q.0).min(sec.design.first().map_or(0.0, |q| q.0));
         let lmax = sec.ground.last().map_or(0.0, |q| q.0).max(sec.design.last().map_or(0.0, |q| q.0));
-        // Datum line, band and labels.
-        g.line("BANG_SO_LIEU", Vec2::new(cx + lmin, base_y), Vec2::new(cx + lmax, base_y));
-        for j in 1..=2 {
-            g.line("BANG_SO_LIEU", Vec2::new(cx + lmin, base_y - row_h * f64::from(j)), Vec2::new(cx + lmax, base_y - row_h * f64::from(j)));
+        // Datum line, band with its label column, and labels.
+        let lab = cx + lmin - 30.0 * k;
+        for j in 0..=2 {
+            let y = base_y - row_h * f64::from(j);
+            g.line("BANG_SO_LIEU", Vec2::new(lab, y), Vec2::new(cx + lmax, y));
         }
-        g.text("CHU", Vec2::new(cx + lmin - 2.0 * k, base_y - row_h * 0.5), th, "Cao độ TN", 0.0, HAlign::Right, VAlign::Middle);
-        g.text("CHU", Vec2::new(cx + lmin - 2.0 * k, base_y - row_h * 1.5), th, "Khoảng cách", 0.0, HAlign::Right, VAlign::Middle);
+        for x in [lab, cx + lmin, cx + lmax] {
+            g.line("BANG_SO_LIEU", Vec2::new(x, base_y), Vec2::new(x, base_y - row_h * 2.0));
+        }
+        g.text("CHU", Vec2::new(lab + 1.5 * k, base_y - row_h * 0.5), th, "Cao độ TN (m)", 0.0, HAlign::Left, VAlign::Middle);
+        g.text("CHU", Vec2::new(lab + 1.5 * k, base_y - row_h * 1.5), th, "Khoảng cách (m)", 0.0, HAlign::Left, VAlign::Middle);
         g.text("CHU", Vec2::new(cx + lmin, base_y + 1.0 * k), th, &format!("MSS {datum:.2}"), 0.0, HAlign::Left, VAlign::Bottom);
         for q in &sec.ground {
             let at = pt(q);
             g.line("COC", Vec2::new(at.x, base_y - row_h * 2.0), Vec2::new(at.x, base_y));
-            g.text("CHU", Vec2::new(at.x, base_y - row_h * 0.5), th * 0.9, &fmt2(q.1), 90.0, HAlign::Center, VAlign::Middle);
-            g.text("CHU", Vec2::new(at.x, base_y - row_h * 1.5), th * 0.9, &format!("{:.1}", q.0), 90.0, HAlign::Center, VAlign::Middle);
+            // Values read upwards just left of the stake line, as in the profile's band.
+            let tx = at.x - th * 0.6;
+            g.text("CHU", Vec2::new(tx, base_y - row_h * 0.5), th * 0.9, &fmt2(q.1), 90.0, HAlign::Center, VAlign::Middle);
+            g.text("CHU", Vec2::new(tx, base_y - row_h * 1.5), th * 0.9, &format!("{:.1}", q.0), 90.0, HAlign::Center, VAlign::Middle);
         }
         // Centre line, ground, design.
         let top = sec.ground.iter().chain(&sec.design).map(|q| q.1).fold(f64::MIN, f64::max);
@@ -634,9 +641,17 @@ fn quantity_table(s: &mut Session, rows: &[Vec<String>], at: Vec2, scale: f64) -
             c.merged = Some((1, 7));
         }
     }
+    // Each column fits its longest text (the title row spans all columns and is left out):
+    // stroke-font advance ≈ 0.93 × height per character, plus 2 units of padding each side.
+    let col_widths: Vec<f64> = (0..7)
+        .map(|j| {
+            let chars = cells.iter().skip(1).filter_map(|r| r.get(j)).map(|c| c.text.chars().count()).max().unwrap_or(0);
+            (chars as f64 * 2.5 * 0.93 + 4.0).max(16.0) * k
+        })
+        .collect();
     let table = Table {
         insert: Vec3::new(at.x, at.y, 0.0),
-        col_widths: [18.0, 28.0, 20.0, 20.0, 20.0, 22.0, 22.0].iter().map(|w| w * k).collect(),
+        col_widths,
         row_heights: vec![8.0 * k; cells.len()],
         cells,
         style: "Standard".into(),
