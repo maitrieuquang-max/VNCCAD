@@ -111,6 +111,17 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        "pdfattach" | "pdfa" if params.is_null() => {
+            if let Some(req) = app.services.request_open.as_ref() {
+                req();
+                return Some(Ok(Value::Null));
+            }
+            if let Some(p) = app.services.pick_image.as_ref().and_then(|f| f()) {
+                crate::canvas::reload_images(app);
+                return Some(app.run(if p.to_ascii_lowercase().ends_with(".pdf") { "pdfattach" } else { "imageattach" }, json!({ "path": p })));
+            }
+            Ok(Value::Null)
+        }
         "imageattach" | "iat" if params.is_null() => {
             if let Some(req) = app.services.request_open.as_ref() {
                 // Web: the browser's picker accepts images; the file is attached when it arrives.
@@ -119,7 +130,7 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             if let Some(p) = app.services.pick_image.as_ref().and_then(|f| f()) {
                 crate::canvas::reload_images(app);
-                return Some(app.run("imageattach", json!({ "path": p })));
+                return Some(app.run(if p.to_ascii_lowercase().ends_with(".pdf") { "pdfattach" } else { "imageattach" }, json!({ "path": p })));
             }
             Ok(Value::Null)
         }

@@ -44,14 +44,74 @@ fn store() -> &'static Mutex<Store> {
     })
 }
 
-/// The file name of a path, lower-case ("C:\\Anh\\Ve Tinh.JPG" → "ve tinh.jpg").
+/// The file name of a path, lower-case ("C:\\Anh\\Ve Tinh.JPG" → "ve tinh.jpg"). A PDF page
+/// suffix ("ban-ve.pdf#2") is kept, so each page is its own image.
 pub fn file_key(path: &str) -> String {
     path.trim().rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase()
+}
+
+/// Resolution PDF pages are drawn at, in pixels per inch.
+pub const PDF_DPI: f64 = 150.0;
+
+/// Split "file.pdf#3" into ("file.pdf", 3); `None` for anything that isn't a PDF.
+pub fn pdf_parts(path: &str) -> Option<(&str, usize)> {
+    let (file, page) = match path.rsplit_once('#') {
+        Some((f, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => (f, p.parse::<usize>().ok()?.max(1)),
+        _ => (path, 1),
+    };
+    file.trim().to_ascii_lowercase().ends_with(".pdf").then_some((file, page))
+}
+
+/// The file part of a stored path (without a PDF page suffix).
+fn file_part(path: &str) -> &str {
+    pdf_parts(path).map_or(path, |(f, _)| f)
+}
+
+/// Size of a PDF page in points (1/72 inch).
+pub fn pdf_page_size(bytes: &[u8], page: usize) -> Option<(f64, f64)> {
+    let pdf = hayro::hayro_syntax::Pdf::new(bytes.to_vec()).ok()?;
+    let pages = pdf.pages();
+    let p = pages.iter().nth(page.checked_sub(1)?)?;
+    let (w, h) = p.render_dimensions();
+    (w > 0.0 && h > 0.0).then_some((f64::from(w), f64::from(h)))
+}
+
+/// Number of pages in a PDF.
+pub fn pdf_page_count(bytes: &[u8]) -> usize {
+    hayro::hayro_syntax::Pdf::new(bytes.to_vec()).map(|p| p.pages().iter().count()).unwrap_or(0)
+}
+
+fn decode_pdf(bytes: &[u8], page: usize) -> Option<Decoded> {
+    let pdf = hayro::hayro_syntax::Pdf::new(bytes.to_vec()).ok()?;
+    let pages = pdf.pages();
+    let p = pages.iter().nth(page.checked_sub(1)?)?;
+    let (w, h) = p.render_dimensions();
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let full = (PDF_DPI / 72.0) as f32;
+    let fit = MAX_SIDE as f32 / w.max(h);
+    let scale = full.min(fit);
+    let cache = hayro::RenderCache::new();
+    let settings = hayro::hayro_interpret::InterpreterSettings::default();
+    let pix = hayro::render(
+        p,
+        &cache,
+        &settings,
+        &hayro::RenderSettings::default(),
+        &hayro::PixmapSettings { x_scale: scale, y_scale: scale, bg_color: hayro::vello_cpu::color::palette::css::WHITE },
+    );
+    let (pw, ph) = (u32::from(pix.width()), u32::from(pix.height()));
+    let source = ((f64::from(w) * PDF_DPI / 72.0).round() as u32, (f64::from(h) * PDF_DPI / 72.0).round() as u32);
+    Some(Decoded { width: pw, height: ph, source_size: source, rgba: pix.data_as_u8_slice().to_vec() })
 }
 
 /// Is this a file name of an image format we read?
 pub fn is_image_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
+    if pdf_parts(&n).is_some() {
+        return false;
+    }
     [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"].iter().any(|e| n.ends_with(e))
 }
 
@@ -84,6 +144,7 @@ fn read_file(path: &std::path::Path) -> Option<Vec<u8>> {
 
 /// The bytes of an image by its stored path.
 pub fn bytes(path: &str) -> Option<Arc<Vec<u8>>> {
+    let path = file_part(path);
     let k = file_key(path);
     if k.is_empty() {
         return None;
@@ -149,7 +210,11 @@ pub fn decoded(path: &str) -> Option<Arc<Decoded>> {
     if let Some(v) = store().lock().unwrap_or_else(PoisonError::into_inner).decoded.get(&k) {
         return v.clone();
     }
-    let d = bytes(path).and_then(|b| decode_bytes(&b)).map(Arc::new);
+    let d = match pdf_parts(path) {
+        Some((_, page)) => bytes(path).and_then(|b| decode_pdf(&b, page)),
+        None => bytes(path).and_then(|b| decode_bytes(&b)),
+    }
+    .map(Arc::new);
     store().lock().unwrap_or_else(PoisonError::into_inner).decoded.insert(k, d.clone());
     d
 }
@@ -250,6 +315,54 @@ mod tests {
         assert!(decoded("khong-co.png").is_none());
         register("hong.png", b"not an image".to_vec());
         assert!(decoded("hong.png").is_none());
+    }
+
+    /// A one-page PDF (A4 portrait, 595×842 pt) with a filled rectangle, written by hand.
+    fn tiny_pdf() -> Vec<u8> {
+        let content = "0 0 1 rg 100 100 200 300 re f";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn pdf_pages_render() {
+        let pdf = tiny_pdf();
+        assert_eq!(pdf_page_count(&pdf), 1);
+        assert_eq!(pdf_page_size(&pdf, 1), Some((595.0, 842.0)));
+        assert!(pdf_page_size(&pdf, 2).is_none());
+        register("mat-bang.pdf", pdf);
+        assert_eq!(pdf_parts("D:\\x\\Mat-Bang.PDF#1"), Some(("D:\\x\\Mat-Bang.PDF", 1)));
+        assert!(!is_image_name("mat-bang.pdf"));
+        let d = decoded("mat-bang.pdf").unwrap();
+        assert_eq!(d.source_size, (1240, 1754));
+        // The rasteriser rounds the page size down to whole pixels.
+        assert!(d.width.abs_diff(1240) <= 1 && d.height.abs_diff(1754) <= 1, "{}x{}", d.width, d.height);
+        // White page with a blue rectangle at (100..300, 100..400) pt from the bottom-left.
+        let px = |x: u32, y: u32| {
+            let i = ((y * d.width + x) * 4) as usize;
+            [d.rgba[i], d.rgba[i + 1], d.rgba[i + 2]]
+        };
+        assert_eq!(px(10, 10), [255, 255, 255]);
+        let (x, y) = ((150.0 * 150.0 / 72.0) as u32, ((842.0 - 200.0) * 150.0 / 72.0) as u32);
+        assert_eq!(px(x, y), [0, 0, 255]);
+        assert!(decoded("mat-bang.pdf#2").is_none());
     }
 
     #[test]

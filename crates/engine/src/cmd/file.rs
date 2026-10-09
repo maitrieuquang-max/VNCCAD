@@ -74,6 +74,16 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(format!("Đã nạp world file {}. Ảnh cùng tên chèn sau sẽ đặt đúng tọa độ.", file_name(name)));
         return Ok(s.active);
     }
+    if lower.ends_with(".pdf") {
+        let fname = file_name(name);
+        cadcraft_io::raster::register(&fname, bytes.to_vec());
+        if s.docs.is_empty() {
+            s.new_drawing(true);
+        }
+        let reference = path.clone().unwrap_or(fname);
+        super::raster::run_pdfattach(s, &json!({ "path": reference }))?;
+        return Ok(s.active);
+    }
     if cadcraft_io::raster::is_image_name(&lower) {
         let fname = file_name(name);
         cadcraft_io::raster::register(&fname, bytes.to_vec());

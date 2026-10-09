@@ -57,7 +57,7 @@ fn services() -> Services {
             rfd::FileDialog::new()
                 .add_filter("Drawing (DXF, DWG)", &["dxf", "dwg"])
                 .add_filter("Font SHX", &["shx"])
-                .add_filter("Ảnh (PNG, JPEG, BMP, TIFF)", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"])
+                .add_filter("Ảnh, PDF nền", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"])
                 .add_filter("All files", &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
@@ -75,7 +75,7 @@ fn services() -> Services {
         })),
         pick_image: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Ảnh (PNG, JPEG, BMP, TIFF)", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"])
+                .add_filter("Ảnh hoặc PDF (PNG, JPEG, BMP, TIFF, PDF)", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),

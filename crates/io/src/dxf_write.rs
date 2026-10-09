@@ -116,6 +116,12 @@ struct Ctx {
     image_defs: Vec<ImageDefObj>,
     /// ACAD_IMAGE_DICT and RASTERVARIABLES handles (when there are images).
     image_dict: Option<(String, String)>,
+    /// PDF underlay → its PDFDEFINITION handle.
+    pdfs: HashMap<Handle, String>,
+    /// One PDFDEFINITION per (file, page): (handle, file, page).
+    pdf_defs: Vec<(String, String, usize)>,
+    /// ACAD_PDFDEFINITIONS dictionary handle (when there are PDF underlays).
+    pdf_dict: Option<String>,
 }
 
 #[derive(Default)]
@@ -784,6 +790,25 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(90, if v.locked { 16384 } else { 0 });
         }
         // Not yet written: images, wipeouts, tables, multileaders, unknown objects.
+        EntityKind::Image(im) if cx.pdfs.contains_key(&e.handle) => {
+            let Some(def) = cx.pdfs.get(&e.handle).cloned() else { return };
+            // Underlay units are inches of the page: scale = drawing units per inch.
+            let px = im.u.xy().len();
+            let scale = px * crate::raster::PDF_DPI;
+            let rot = im.u.y.atan2(im.u.x);
+            w.s(0, "PDFUNDERLAY");
+            common(w, e, owner, paper, "AcDbUnderlayReference");
+            w.s(340, def);
+            w.p(10, im.insert);
+            w.f(41, scale);
+            w.f(42, scale);
+            w.f(43, scale);
+            w.f(50, rot.to_degrees());
+            w.p(210, Vec3::new(0.0, 0.0, 1.0));
+            w.i(280, 2);
+            w.i(281, 100);
+            w.i(282, 0);
+        }
         EntityKind::Image(im) => {
             let Some((def, reactor)) = cx.images.get(&e.handle).cloned() else { return };
             w.s(0, "IMAGE");
@@ -1117,6 +1142,20 @@ pub fn write(d: &Drawing) -> String {
     }
     // VNCCad: raster images: one IMAGEDEF per file, one reactor per IMAGE.
     for e in &every {
+        if let EntityKind::Image(im) = &e.kind
+            && let Some((file, page)) = crate::raster::pdf_parts(&im.path)
+        {
+            let def = match cx.pdf_defs.iter().find(|(_, f, p)| f.eq_ignore_ascii_case(file) && *p == page) {
+                Some((h, _, _)) => h.clone(),
+                None => {
+                    let h = w.h();
+                    cx.pdf_defs.push((h.clone(), file.to_string(), page));
+                    h
+                }
+            };
+            cx.pdfs.insert(e.handle, def);
+            continue;
+        }
         if let EntityKind::Image(im) = &e.kind {
             let pos = match cx.image_defs.iter().position(|x| x.path.eq_ignore_ascii_case(&im.path)) {
                 Some(p) => p,
@@ -1134,6 +1173,9 @@ pub fn write(d: &Drawing) -> String {
     }
     if !cx.image_defs.is_empty() {
         cx.image_dict = Some((w.h(), w.h()));
+    }
+    if !cx.pdf_defs.is_empty() {
+        cx.pdf_dict = Some(w.h());
     }
     let default_table_style = [TableStyle::default()];
     let table_styles: &[TableStyle] = if d.table_styles.is_empty() { &default_table_style } else { &d.table_styles };
@@ -1171,6 +1213,10 @@ pub fn write(d: &Drawing) -> String {
     w.s(0, "SECTION");
     w.s(2, "CLASSES");
     let mut classes = vec![("TABLESTYLE", "AcDbTableStyle", 4095, false)];
+    if !cx.pdf_defs.is_empty() {
+        classes.push(("PDFUNDERLAY", "AcDbPdfReference", 4095, true));
+        classes.push(("PDFDEFINITION", "AcDbPdfDefinition", 1153, false));
+    }
     if !cx.image_defs.is_empty() {
         classes.push(("IMAGE", "AcDbRasterImage", 127, true));
         classes.push(("IMAGEDEF", "AcDbRasterImageDef", 0, false));
@@ -1430,6 +1476,10 @@ pub fn write(d: &Drawing) -> String {
     w.s(350, group_dict.clone());
     w.s(3, "ACAD_LAYOUT");
     w.s(350, layout_dict.clone());
+    if let Some(pd) = &cx.pdf_dict {
+        w.s(3, "ACAD_PDFDEFINITIONS");
+        w.s(350, pd.clone());
+    }
     if let Some((img_dict, vars)) = &cx.image_dict {
         w.s(3, "ACAD_IMAGE_DICT");
         w.s(350, img_dict.clone());
@@ -1470,6 +1520,29 @@ pub fn write(d: &Drawing) -> String {
         w.i(280, 1);
         for c in chunks {
             w.s(1, c.clone());
+        }
+    }
+    // PDF underlays: ACAD_PDFDEFINITIONS and one PDFDEFINITION per file and page.
+    if let Some(pd) = cx.pdf_dict.clone() {
+        w.s(0, "DICTIONARY");
+        w.s(5, pd.clone());
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(281, 1);
+        for (h, file, page) in &cx.pdf_defs {
+            let base = crate::raster::file_key(file);
+            let base = base.rsplit_once('.').map_or(base.clone(), |(a, _)| a.to_string());
+            w.s(3, format!("{base} - {page}"));
+            w.s(350, h.clone());
+        }
+        for (h, file, page) in &cx.pdf_defs {
+            w.s(0, "PDFDEFINITION");
+            w.s(5, h.clone());
+            w.group("ACAD_REACTORS", 330, &[pd.as_str()]);
+            w.s(330, pd.clone());
+            w.s(100, "AcDbUnderlayDefinition");
+            w.s(1, file.clone());
+            w.s(2, page.to_string());
         }
     }
     // Raster images: ACAD_IMAGE_DICT, RASTERVARIABLES, IMAGEDEF and IMAGEDEF_REACTOR objects.

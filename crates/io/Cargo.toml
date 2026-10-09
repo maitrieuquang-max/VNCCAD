@@ -21,3 +21,5 @@ serde = { workspace = true }
 miniz_oxide = "0.8"
 # VNCCad: raster images for IMAGE entities (PNG/JPEG from the workspace, plus BMP and TIFF).
 image = { workspace = true, features = ["bmp", "tiff"] }
+# VNCCad: PDF pages as underlays (pure Rust, MIT OR Apache-2.0).
+hayro = { version = "0.8", default-features = false }

@@ -888,3 +888,25 @@ fn image_entities_round_trip_with_their_file() {
     assert!(imgs.iter().all(|i| i.path == im.path && i.size == im.size && i.u == im.u));
     assert!(imgs.iter().any(|i| i.insert == im.insert));
 }
+
+#[test]
+fn pdf_underlays_round_trip_as_pdfunderlay() {
+    let mut d = Drawing::new_metric();
+    let px = 100.0 / crate::raster::PDF_DPI; // 100 drawing units per inch of the page
+    let im = Image {
+        insert: Vec3::new(5.0, 6.0, 0.0),
+        u: Vec3::new(px, 0.0, 0.0),
+        v: Vec3::new(0.0, px, 0.0),
+        size: Vec2::new(1240.0, 1754.0),
+        path: "D:\\Ho so\\Mat bang.pdf#3".into(),
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Image(im.clone())).unwrap();
+    let text = crate::write_dxf(&d);
+    assert!(text.contains("PDFUNDERLAY") && text.contains("PDFDEFINITION") && text.contains("ACAD_PDFDEFINITIONS"));
+    assert!(!text.contains("IMAGEDEF"), "a PDF is not written as a raster image");
+    let back = crate::read_dxf(text.as_bytes()).unwrap();
+    let got = back.model.iter().find_map(|e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None }).unwrap();
+    assert_eq!(got.path, im.path);
+    assert_eq!(got.insert, im.insert);
+    assert!((got.u.x - px).abs() < 1e-12 && got.u.y.abs() < 1e-12);
+}

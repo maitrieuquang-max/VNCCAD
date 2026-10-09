@@ -16,6 +16,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Insert", "Raster Image Reference..."])
             .alias(&["iat", "chenanh"])
             .params("{path | name (a file already given to the app), insert?: [x,y] lower-left corner, width?: drawing units (default: fits the view), rotation?: degrees, world?: bool (use a world file .jgw/.pgw/.tfw/.wld when found, default true)}"),
+        CommandSpec::new("pdfattach", "PDF Underlay...", run_pdfattach)
+            .menu(&["Insert", "PDF Underlay..."])
+            .alias(&["pdfa", "chenpdf"])
+            .params("{path | name, page?: 1, insert?: [x,y] lower-left corner, scale?: drawing units per inch of the page (default: fits the view), rotation?: degrees}"),
         CommandSpec::new("image", "Image Manager", run_image_list)
             .menu(&["Insert", "Image Manager"])
             .alias(&["im", "imagemanager"])
@@ -71,6 +75,50 @@ pub(crate) fn run_imageattach(s: &mut Session, p: &Value) -> Result<Value> {
         if how.is_empty() { format!("Đã chèn ảnh {name} ({w}×{h} px).") } else { format!("Đã chèn ảnh {name} ({w}×{h} px) {how}.") };
     s.echo(msg.clone());
     Ok(json!({ "handle": handle.hex(), "width": w, "height": h, "georeferenced": !how.is_empty(), "message": msg }))
+}
+
+pub(crate) fn run_pdfattach(s: &mut Session, p: &Value) -> Result<Value> {
+    let file = str_param(p, "path").or_else(|| str_param(p, "name")).ok_or_else(|| bad("pdfattach", "`path` or `name` is required"))?.to_string();
+    let page = p.get("page").and_then(Value::as_u64).unwrap_or(1).clamp(1, 100_000) as usize;
+    let bytes = raster::bytes(&file).ok_or_else(|| bad("pdfattach", format!("không tìm thấy file {file}")))?;
+    let pages = raster::pdf_page_count(&bytes);
+    if pages == 0 {
+        return Err(bad("pdfattach", format!("{file}: không đọc được PDF (file mã hóa hoặc hỏng)")));
+    }
+    let (wpt, hpt) = raster::pdf_page_size(&bytes, page).ok_or_else(|| bad("pdfattach", format!("{file} chỉ có {pages} trang")))?;
+    let (wpx, hpx) = ((wpt * raster::PDF_DPI / 72.0).round(), (hpt * raster::PDF_DPI / 72.0).round());
+    let view = s.state().map(|st| st.view()).ok();
+    // Drawing units per inch of the page.
+    let scale = p.get("scale").and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).unwrap_or_else(|| match view {
+        Some(vw) => vw.height * 0.8 / (hpt / 72.0),
+        None => 1.0,
+    });
+    let px = scale / raster::PDF_DPI;
+    let rot = p.get("rotation").and_then(Value::as_f64).unwrap_or(0.0).to_radians();
+    let u = Vec2::new(rot.cos(), rot.sin()) * px;
+    let v = Vec2::new(-rot.sin(), rot.cos()) * px;
+    let insert = match p.get("insert").and_then(Value::as_array) {
+        Some(a) => Vec2::new(a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)),
+        None => match view {
+            Some(vw) => vw.center - (u * wpx + v * hpx) * 0.5,
+            None => Vec2::ZERO,
+        },
+    };
+    let path = if page == 1 { file.clone() } else { format!("{file}#{page}") };
+    let image = Image {
+        insert: Vec3::new(insert.x, insert.y, 0.0),
+        u: Vec3::new(u.x, u.y, 0.0),
+        v: Vec3::new(v.x, v.y, 0.0),
+        size: Vec2::new(wpx, hpx),
+        path,
+    };
+    let space = s.space();
+    let layer = s.doc()?.header.str("CLAYER", "0");
+    let handle =
+        s.doc_mut()?.add(&space, Common { layer, ..Common::default() }, EntityKind::Image(image)).map_err(|e| bad("pdfattach", e.to_string()))?;
+    let msg = format!("Đã chèn trang {page}/{pages} của {} làm nền.", raster::file_key(&file));
+    s.echo(msg.clone());
+    Ok(json!({ "handle": handle.hex(), "page": page, "pages": pages, "message": msg }))
 }
 
 fn run_image_list(s: &mut Session, _p: &Value) -> Result<Value> {

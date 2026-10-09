@@ -298,6 +298,20 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (q.y + 0.5)).collect();
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
+        "PDFUNDERLAY" => {
+            // Underlay units are inches of the page; the page size comes with its definition.
+            let scale = t.fd(41, 1.0);
+            let px = if scale.is_finite() && scale > 0.0 { scale / crate::raster::PDF_DPI } else { 1.0 / crate::raster::PDF_DPI };
+            let rot = t.fd(50, 0.0).to_radians();
+            EntityKind::Image(Image {
+                insert: t.p(10),
+                u: Vec3::new(rot.cos() * px, rot.sin() * px, 0.0),
+                v: Vec3::new(-rot.sin() * px, rot.cos() * px, 0.0),
+                // A4 portrait at the display resolution until the file is found.
+                size: Vec2::new(1240.0, 1754.0),
+                path: t.s(340).map(|h| format!("{PDFDEF_REF}{}", h.trim().to_ascii_uppercase())).unwrap_or_default(),
+            })
+        }
         "IMAGE" => {
             // The file path lives on the IMAGEDEF object (340); resolved after OBJECTS is read.
             EntityKind::Image(Image {
@@ -941,17 +955,31 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
 
 /// Marks an IMAGE path that still names its IMAGEDEF by handle.
 const IMAGEDEF_REF: char = '\u{1}';
+/// Marks a PDF underlay path that still names its PDFDEFINITION by handle.
+const PDFDEF_REF: char = '\u{2}';
 
 /// Replace IMAGEDEF handles in IMAGE paths by the file names the IMAGEDEF objects hold.
 fn resolve_image_paths(d: &mut Drawing, defs: &HashMap<String, String>) {
     fn fix(store: &mut cadcraft_doc::EntityStore, defs: &HashMap<String, String>) {
-        let hs: Vec<Handle> =
-            store.iter().filter(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with(IMAGEDEF_REF))).map(|e| e.handle).collect();
+        let hs: Vec<Handle> = store
+            .iter()
+            .filter(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with([IMAGEDEF_REF, PDFDEF_REF])))
+            .map(|e| e.handle)
+            .collect();
         for h in hs {
             store.modify(h, |e| {
                 if let EntityKind::Image(i) = &mut e.kind {
-                    let key = i.path.trim_start_matches(IMAGEDEF_REF).to_string();
+                    let pdf = i.path.starts_with(PDFDEF_REF);
+                    let key = i.path.trim_start_matches([IMAGEDEF_REF, PDFDEF_REF]).to_string();
                     i.path = defs.get(&key).cloned().unwrap_or_default();
+                    // A PDF page found on this computer gives the real page size.
+                    if pdf
+                        && let Some((_, page)) = crate::raster::pdf_parts(&i.path)
+                        && let Some(b) = crate::raster::bytes(&i.path)
+                        && let Some((w, h)) = crate::raster::pdf_page_size(&b, page)
+                    {
+                        i.size = Vec2::new((w * crate::raster::PDF_DPI / 72.0).round(), (h * crate::raster::PDF_DPI / 72.0).round());
+                    }
                 }
             });
         }
@@ -963,7 +991,7 @@ fn resolve_image_paths(d: &mut Drawing, defs: &HashMap<String, String>) {
     let names: Vec<String> = d.blocks.keys().cloned().collect();
     for n in names {
         if let Some(b) = d.blocks.get_mut(&n)
-            && b.entities.iter().any(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with(IMAGEDEF_REF)))
+            && b.entities.iter().any(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with([IMAGEDEF_REF, PDFDEF_REF])))
         {
             fix(&mut std::sync::Arc::make_mut(b).entities, defs);
         }
@@ -994,6 +1022,16 @@ impl Objects {
             "IMAGEDEF" => {
                 if self.imagedefs.len() < MAX_OBJECTS {
                     self.imagedefs.insert(h.clone(), T(tags).s(1).unwrap_or_default());
+                }
+            }
+            "PDFDEFINITION" => {
+                if self.imagedefs.len() < MAX_OBJECTS {
+                    let t = T(tags);
+                    let file = t.s(1).unwrap_or_default();
+                    let page = t.s(2).and_then(|p| p.trim().parse::<usize>().ok()).unwrap_or(1);
+                    // A PDF path that doesn't end in .pdf still marks the underlay as a PDF.
+                    let file = if file.to_ascii_lowercase().ends_with(".pdf") { file } else { format!("{file}.pdf") };
+                    self.imagedefs.insert(h.clone(), if page > 1 { format!("{file}#{page}") } else { file });
                 }
             }
             "DICTIONARY" => {
