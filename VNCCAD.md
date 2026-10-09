@@ -26,11 +26,26 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 - Web: bộ nhớ trình duyệt (localStorage, khoảng 5 MB mỗi trang). Bản vẽ quá lớn sẽ không tự lưu được; chương trình báo một lần trên dòng lệnh.
 - Đổi thư mục bằng biến môi trường `VNCCAD_AUTOSAVE_DIR`.
 
+## Giai đoạn 2 – bù các chức năng 2D còn thiếu so với AutoCAD
+
+| Hạng mục | Lệnh / cách dùng | Ghi chú |
+|---|---|---|
+| Bản vẽ cũ TCVN3 (ABC) và VNI | Tự chuyển khi mở file; `VNCONVERT` (ép mã `tcvn3`, `tcvn3h`, `vni` cho đối tượng chọn) | Nhận font `.VnTime`, `.VnTimeH` (chữ hoa), `VNI-Times`…, kể cả đổi font giữa dòng trong MTEXT; kiểu chữ được đổi sang Times New Roman/Arial |
+| Font SHX | Tự tìm cạnh bản vẽ, thư mục `fonts/` cạnh bản vẽ, `VNCCad/fonts`, `VNCCAD_FONTS`, thư mục Fonts của AutoCAD đã cài; kéo-thả file `.shx`; `SHXFONTS` | Đọc shapes 1.0/1.1, unifont, bigfont; ký tự font thiếu (chữ Việt có dấu) lấy từ font nét có sẵn |
+| Ảnh nền | `IMAGEATTACH` (PNG, JPEG, BMP, TIFF), `IMAGE` (liệt kê, báo file thiếu); kéo-thả ảnh | Có world file (`.jgw/.pgw/.tfw/.wld`) thì đặt đúng tọa độ; lưu DXF đầy đủ IMAGEDEF |
+| PDF nền | `PDFATTACH` (`page`, `scale` = đơn vị bản vẽ/inch); kéo-thả PDF | Lưu DXF dạng PDFUNDERLAY + PDFDEFINITION |
+| Tham chiếu ngoài (Xref) | `XATTACH`, `XREF` (`list`, `reload`, `detach`, `bind`) | Tự nạp lại khi mở; layer/block phụ thuộc đặt tên `XREF\|TÊN` và không lưu vào file |
+| Cầu đường | `VNLAYERS` (bộ layer đường/cầu theo TCVN 8-20:2002), `TRACDOC`, `TRACNGANG`, `BANGKL` | Dán bảng số liệu từ Excel (tab, `;` hoặc `,`; số thập phân dấu phẩy; lý trình `Km1+250.5`) |
+| Tỷ lệ chú thích | `CANNOSCALE 1:100`; kiểu chữ/kích thước bật Annotative | Trong Model vẽ theo CANNOSCALE; trong viewport theo tỷ lệ viewport |
+| Bảng nét in CTB | `PLOTSTYLE monochrome`, `grayscale` hoặc `<file>.ctb`; kéo-thả `.ctb` | Áp màu, độ dày nét, độ đậm nhạt theo số màu khi PLOT/EXPORTPDF; file `.ctb` đặt cạnh bản vẽ hoặc trong `VNCCad/plotstyles` |
+
 ### Giới hạn hiện tại
 
 - **DWG chỉ mở/lưu được trên bản desktop.** Trên web, hãy dùng DXF hoặc chuyển DWG sang DXF trước (ODA File Converter, hoặc mở bằng bản desktop rồi lưu DXF).
 - Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
+- Bảng nét in theo tên (STB) chưa hỗ trợ; Xref lồng nhau (xref bên trong xref) không được nạp; ảnh/PDF nền chưa in ra PDF khi PLOT.
+- Kích thước annotative chỉ áp dụng khi kích thước được dựng lại trong VNCCad (kích thước đọc từ file kèm block `*D` vẽ theo block đó).
 
 ## Build
 
@@ -75,4 +90,4 @@ Sau khi mở trang lần đầu, Chrome/Edge sẽ hiện nút **Cài đặt** tr
 ## Lộ trình tiếp theo
 
 - **Giai đoạn 2:** VN2000/UTM, nhập/xuất KML, nền bản đồ vệ tinh, đường đồng mức (chuyển từ DXF Toolkit), giao diện tiếng Việt.
-- **Giai đoạn 3:** công cụ cầu đường: trắc dọc, trắc ngang, chuẩn hóa layer/ký hiệu theo TCVN, bảng khối lượng.
+- **Tiếp theo:** in ảnh/PDF nền ra PDF, STB, block editor và dynamic block, AutoLISP hoặc bộ lệnh tự động hóa thay thế.

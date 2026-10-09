@@ -18,12 +18,65 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["vnc", "chuyenma"])
             .params("{encoding?: \"auto\" (by text style font) | \"tcvn3\" | \"tcvn3h\" (capital-only fonts) | \"vni\", handles?: forced encodings act on these or the selection, else on every object}")
             .enabled(always),
+        CommandSpec::new("cannoscale", "Annotation Scale", run_cannoscale)
+            .menu(&["Format", "Annotation Scale"])
+            .alias(&["tyle", "tylechuthich"])
+            .params("{scale: \"1:100\" | \"1:500\" | … } → annotative text and dimensions in model space are drawn at this scale"),
+        CommandSpec::new("plotstyle", "Plot Style Table", run_plotstyle)
+            .menu(&["File", "Plot Style Table..."])
+            .alias(&["ctb", "bangnet"])
+            .params("{name: \"monochrome\" | \"grayscale\" | \"<file>.ctb\" | \"none\"} → used by PLOT/EXPORTPDF of the current layout (or of model space)"),
         CommandSpec::new("shxfonts", "SHX Fonts", run_shxfonts)
             .menu(&["Tools", "Vietnamese", "SHX Fonts"])
             .params("{} → the SHX fonts loaded and the folders searched")
             .enabled(always)
             .noundo(),
     ]
+}
+
+fn run_cannoscale(s: &mut Session, p: &Value) -> Result<Value> {
+    let Some(v) = str_param(p, "scale") else {
+        let cur = s.doc()?.header.str("CANNOSCALE", "1:1");
+        return Ok(json!({ "scale": cur, "message": format!("Tỷ lệ chú thích hiện tại: {cur}") }));
+    };
+    let v = v.trim().to_string();
+    let f = cadcraft_render::parse_anno_scale(&v);
+    if (f - 1.0).abs() < 1e-12 && !matches!(v.as_str(), "1:1" | "1/1" | "1") {
+        return Err(bad("cannoscale", format!("tỷ lệ không hợp lệ `{v}` (ví dụ 1:100)")));
+    }
+    s.doc_mut()?.header.set("CANNOSCALE", cadcraft_doc::HVal::Str(v.clone()));
+    let msg = format!("Tỷ lệ chú thích: {v}. Chữ và kích thước có kiểu annotative trong Model vẽ theo tỷ lệ này.");
+    s.echo(msg.clone());
+    Ok(json!({ "scale": v, "factor": f, "message": msg }))
+}
+
+fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
+    let name =
+        str_param(p, "name").ok_or_else(|| bad("plotstyle", "`name` is required (monochrome, grayscale, <file>.ctb, none)"))?.trim().to_string();
+    let none = name.is_empty() || name.eq_ignore_ascii_case("none") || name.eq_ignore_ascii_case("khong");
+    if !none {
+        cadcraft_io::ctb::find(&name).map_err(|e| bad("plotstyle", e))?;
+    }
+    let value = if none { String::new() } else { name.clone() };
+    match s.layout_space() {
+        cadcraft_doc::Space::Paper(layout) => {
+            let d = s.doc_mut()?;
+            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == layout) {
+                l.page.plot_style_table = value.clone();
+            }
+        }
+        cadcraft_doc::Space::Model => {
+            let d = s.doc_mut()?;
+            if none {
+                d.header.set("VNCCAD_PLOTSTYLE", cadcraft_doc::HVal::Str("None".into()));
+            } else {
+                d.header.set("VNCCAD_PLOTSTYLE", cadcraft_doc::HVal::Str(value.clone()));
+            }
+        }
+    }
+    let msg = if none { "Đã bỏ bảng nét in.".to_string() } else { format!("Bảng nét in: {name} (áp dụng khi PLOT/EXPORTPDF).") };
+    s.echo(msg.clone());
+    Ok(json!({ "name": value, "message": msg }))
 }
 
 fn run_shxfonts(_s: &mut Session, _p: &Value) -> Result<Value> {
@@ -97,5 +150,29 @@ mod tests {
         s.execute("undo", &json!({})).unwrap();
         assert!(has(&s, "C\u{C7}u"));
         assert!(s.execute("vnconvert", &json!({"encoding": "xyz"})).is_err());
+    }
+
+    #[test]
+    fn annotation_scale_and_plot_style() {
+        let mut s = Session::new();
+        let r = s.execute("cannoscale", &json!({"scale": "1:100"})).unwrap();
+        assert_eq!(r["factor"], 100.0);
+        assert!(s.execute("cannoscale", &json!({"scale": "abc"})).is_err());
+        // A red line plots red without a table and black with "monochrome".
+        let line = cadcraft_doc::EntityKind::Line(cadcraft_doc::Line { a: cadcraft_geom::Vec3::ZERO, b: cadcraft_geom::Vec3::new(100.0, 0.0, 0.0) });
+        let common = cadcraft_doc::Common { color: cadcraft_color::Color::Index(1), ..cadcraft_doc::Common::default() };
+        s.doc_mut().unwrap().add(&cadcraft_doc::Space::Model, common, line).unwrap();
+        // The real plotter (other tests may install fake IO hooks first).
+        let pdf_text = |s: &mut Session| {
+            let b = cadcraft_io::plot(s.doc().unwrap(), &cadcraft_doc::Space::Model, &json!({"compress": false})).unwrap();
+            String::from_utf8_lossy(&b).into_owned()
+        };
+        assert!(pdf_text(&mut s).contains("1 0 0 RG"));
+        s.execute("plotstyle", &json!({"name": "monochrome"})).unwrap();
+        let mono = pdf_text(&mut s);
+        assert!(!mono.contains("1 0 0 RG") && mono.contains("0 0 0 RG"), "monochrome plots black");
+        assert!(s.execute("plotstyle", &json!({"name": "khong-co.ctb"})).is_err());
+        s.execute("plotstyle", &json!({"name": "none"})).unwrap();
+        assert!(pdf_text(&mut s).contains("1 0 0 RG"));
     }
 }

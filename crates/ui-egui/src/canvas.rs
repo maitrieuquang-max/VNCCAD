@@ -129,6 +129,8 @@ fn ensure_list(app: &mut CadApp, px: f64) {
         text: true,
         fill: true,
         lineweights: app.session.settings.lwdisplay,
+        pens: None,
+        anno_scale: 0.0,
     };
     let opts = cadcraft_render::Options { tolerance: 2f64.powi(band) * 0.5, ..opts };
     let space = st.space.clone();

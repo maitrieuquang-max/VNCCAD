@@ -378,3 +378,48 @@ fn table_title_is_centred_and_merged() {
     let b = Bounds2::from_points(text);
     assert!((b.center().x - 3.0).abs() < 0.05, "{b:?}");
 }
+
+#[test]
+fn annotative_text_scales_with_cannoscale() {
+    let mut d = Drawing::new_metric();
+    d.text_styles.push(cadcraft_doc::TextStyle { name: "ANNO".into(), annotative: true, ..cadcraft_doc::TextStyle::default() });
+    let text = |style: &str| cadcraft_doc::Text {
+        insert: Vec3::ZERO,
+        align_pt: None,
+        height: 2.5,
+        value: "H".into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: style.into(),
+        halign: cadcraft_doc::HAlign::default(),
+        valign: cadcraft_doc::VAlign::default(),
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Text(text("ANNO"))).unwrap();
+    let height = |d: &Drawing| build(d, &Space::Model, &Options::default()).bounds.height();
+    let h1 = height(&d);
+    d.header.set("CANNOSCALE", cadcraft_doc::HVal::Str("1:100".into()));
+    let h100 = height(&d);
+    assert!((h100 / h1 - 100.0).abs() < 1.0, "annotative text grows with the scale: {h1} → {h100}");
+    // A non-annotative text keeps its height.
+    let mut d2 = Drawing::new_metric();
+    d2.add(&Space::Model, Common::default(), EntityKind::Text(text("Standard"))).unwrap();
+    let a = height(&d2);
+    d2.header.set("CANNOSCALE", cadcraft_doc::HVal::Str("1:100".into()));
+    assert!((height(&d2) - a).abs() < 1e-9);
+    assert_eq!(parse_anno_scale("1:500"), 500.0);
+    assert_eq!(parse_anno_scale("2:1"), 0.5);
+    assert_eq!(parse_anno_scale("rác"), 1.0);
+}
+
+#[test]
+fn plot_pens_recolour_by_colour_index() {
+    let mut d = Drawing::new_metric();
+    let line = EntityKind::Line(cadcraft_doc::Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) });
+    d.add(&Space::Model, Common { color: cadcraft_color::Color::Index(1), ..Common::default() }, line).unwrap();
+    let opts = Options { pens: Some(std::sync::Arc::new(pens::PenTable::monochrome())), ..Options::default() };
+    let shown = build(&d, &Space::Model, &opts);
+    assert_eq!(shown.prims.first().map(|p| p.color), Some(cadcraft_color::Rgb(255, 0, 0)), "the screen ignores plot styles");
+    let plotted = build_plot(&d, &Space::Model, &opts);
+    assert_eq!(plotted.prims.first().map(|p| p.color), Some(cadcraft_color::Rgb(0, 0, 0)));
+}

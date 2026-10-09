@@ -496,10 +496,10 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             ("Dimension style", h.str("DIMSTYLE", "Standard"), true),
             ("Multileader style", h.str("CMLEADERSTYLE", "Standard"), true),
             ("Table style", h.str("CTABLESTYLE", "Standard"), true),
-            ("Annotation scale", "1:1".into(), true),
+            ("Annotation scale", h.str("CANNOSCALE", "1:1"), true),
             ("Text height", format!("{:.4}", h.f64("TEXTSIZE", 0.2)), true),
             ("Plot style", "ByColor".into(), true),
-            ("Plot style table", "None".into(), true),
+            ("Plot style table", h.str("VNCCAD_PLOTSTYLE", "None"), true),
             ("Plot style attached to", "Model".into(), false),
             ("Plot table type", "Not available".into(), false),
         ];

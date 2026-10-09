@@ -38,6 +38,9 @@ pub struct PdfOptions {
     /// Flate-compress the content stream.
     pub compress: bool,
     pub title: String,
+    /// VNCCad: plot style table (".ctb" name, or the built-in "monochrome" / "grayscale").
+    /// Default: the layout's page setup.
+    pub plot_style: Option<String>,
 }
 
 impl PdfOptions {
@@ -57,6 +60,7 @@ impl PdfOptions {
             lineweights: v.get("lineweights").and_then(Value::as_bool),
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+            plot_style: v.get("plotStyleTable").and_then(Value::as_str).map(str::to_string).filter(|s| !s.trim().is_empty()),
         }
     }
 }
@@ -126,7 +130,16 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
         Space::Paper(_) => page.lineweights,
         Space::Model => true,
     });
-    let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights };
+    let saved = match space {
+        Space::Paper(_) => page.plot_style_table.clone(),
+        Space::Model => d.header.str("VNCCAD_PLOTSTYLE", ""),
+    };
+    let style = o.plot_style.clone().or_else(|| Some(saved).filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none")));
+    let pens = match style {
+        Some(name) => Some(std::sync::Arc::new(crate::ctb::find(&name).map_err(IoError::Format)?)),
+        None => None,
+    };
+    let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights, pens, anno_scale: 0.0 };
     let k = unit_mm * PT_PER_MM;
     let fit = o.fit.unwrap_or(matches!(space, Space::Model));
     // Chord tolerance: about 0.05 mm on paper.

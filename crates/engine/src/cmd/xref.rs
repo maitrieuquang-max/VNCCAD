@@ -374,7 +374,7 @@ mod tests {
         file::set_io(file::IoHooks {
             read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
             write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
-            plot: None,
+            plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
         });
     }
 

@@ -74,6 +74,15 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(format!("Đã nạp world file {}. Ảnh cùng tên chèn sau sẽ đặt đúng tọa độ.", file_name(name)));
         return Ok(s.active);
     }
+    if lower.ends_with(".ctb") {
+        let fname = file_name(name);
+        cadcraft_io::raster::register(&fname, bytes.to_vec());
+        match cadcraft_io::ctb::find(&fname) {
+            Ok(_) => s.echo(format!("Đã nạp bảng nét in {fname}. Dùng PLOTSTYLE để chọn.")),
+            Err(e) => return Err(bad("open", e)),
+        }
+        return Ok(s.active);
+    }
     if lower.ends_with(".pdf") {
         let fname = file_name(name);
         cadcraft_io::raster::register(&fname, bytes.to_vec());

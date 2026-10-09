@@ -13,6 +13,7 @@ mod fill;
 mod hatch;
 mod linetype;
 pub mod paper;
+pub mod pens;
 pub mod raster;
 pub mod units;
 
@@ -88,12 +89,33 @@ pub struct Options {
     /// Highlighted (selected) handles are not special here; the canvas overlays them.
     pub fill: bool,
     pub lineweights: bool,
+    /// VNCCad: plot pens (a colour-dependent plot style table), applied when plotting.
+    pub pens: Option<std::sync::Arc<pens::PenTable>>,
+    /// VNCCad: annotation scale for model space (drawing units per paper unit; 0 = read
+    /// CANNOSCALE from the drawing). Viewports use their own scale.
+    pub anno_scale: f64,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, pens: None, anno_scale: 0.0 }
     }
+}
+
+/// Drawing units per paper unit for an annotation scale written "1:100", "1/100", "2:1" or a
+/// bare factor ("100"). Anything unreadable is 1.
+pub fn parse_anno_scale(s: &str) -> f64 {
+    let s = s.trim();
+    let f = match s.split_once([':', '/']) {
+        Some((a, b)) => b.trim().replace(',', ".").parse::<f64>().ok().zip(a.trim().replace(',', ".").parse::<f64>().ok()).map(|(b, a)| b / a),
+        None => s.replace(',', ".").parse::<f64>().ok(),
+    };
+    f.filter(|x| x.is_finite() && *x > 0.0 && *x < 1.0e7).unwrap_or(1.0)
+}
+
+/// The model-space annotation scale of a drawing (CANNOSCALE).
+pub fn drawing_anno_scale(d: &Drawing) -> f64 {
+    parse_anno_scale(&d.header.str("CANNOSCALE", "1:1"))
 }
 
 /// Graphics state inherited through block references.
@@ -128,6 +150,8 @@ struct Builder<'a> {
     opts: &'a Options,
     /// Plotting: skip layers marked "do not plot".
     plotting: bool,
+    /// Drawing units per paper unit for annotative text and dimensions.
+    anno: f64,
 }
 
 impl Builder<'_> {
@@ -217,7 +241,10 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
 }
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
-    let mut b = Builder { list: DisplayList::default(), opts, plotting };
+    let model_anno = if opts.anno_scale > 0.0 { opts.anno_scale } else { drawing_anno_scale(d) };
+    // Paper space annotations are at paper size; model space ones scale to CANNOSCALE.
+    let anno = if matches!(space, Space::Paper(_)) { 1.0 } else { model_anno };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, anno };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -264,7 +291,8 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mhalf = half / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting };
+    // Annotative objects seen through a viewport take the viewport's scale.
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, anno: 1.0 / s };
     for me in d.model.iter() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
             let eb = cadcraft_doc::entity_bounds(d, me, 0);
@@ -336,14 +364,15 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
 
 /// Build the display list for a set of loose entities (previews, rubber bands).
 pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents: I, opts: &Options) -> DisplayList {
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false };
+    let anno = if opts.anno_scale > 0.0 { opts.anno_scale } else { drawing_anno_scale(d) };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, anno };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
     b.list
 }
 
-fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
+fn resolve(ctx: &Ctx, e: &Entity, plotting: bool, pens: Option<&pens::PenTable>) -> (Rgb, f32, Option<cadcraft_doc::Linetype>, f64, bool) {
     let d = ctx.d;
     // Layer "0" inside a block takes the insert's layer.
     let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
@@ -369,11 +398,34 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
     let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale;
+    // VNCCad: plot style table by the object's effective colour index.
+    let (rgb, lw_mm) = match pens.filter(|_| plotting) {
+        Some(t) => {
+            let eff = match e.common.color {
+                Color::ByLayer => layer_color,
+                Color::ByBlock => ctx.block_color,
+                c => c,
+            };
+            let aci = if let Color::Index(i) = eff { i } else { 0 };
+            t.apply(aci, rgb, lw_mm)
+        }
+        None => (rgb, lw_mm),
+    };
     (rgb, lw_mm, lt, scale, visible)
 }
 
+/// VNCCad: a copy of `t` sized for annotation scale `anno` when its style is annotative.
+fn anno_text(d: &Drawing, t: &cadcraft_doc::Text, anno: f64) -> Option<cadcraft_doc::Text> {
+    if (anno - 1.0).abs() < 1e-12 || !d.text_style(&t.style).is_some_and(|s| s.annotative) {
+        return None;
+    }
+    let mut t = t.clone();
+    t.height *= anno;
+    Some(t)
+}
+
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
-    let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
+    let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting, b.opts.pens.as_deref());
     if !visible {
         return;
     }
@@ -400,6 +452,8 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            let scaled = anno_text(ctx.d, t, b.anno);
+            let t = scaled.as_ref().unwrap_or(t);
             let (sh, _) = place_text_entity(ctx.d, t, &t.value);
             b.shaped(ctx, rgb, lw, &sh);
         }
@@ -411,7 +465,14 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
-            mtext(b, ctx, t, rgb, lw);
+            if (b.anno - 1.0).abs() > 1e-12 && ctx.d.text_style(&t.style).is_some_and(|s| s.annotative) {
+                let mut m = t.clone();
+                m.height *= b.anno;
+                m.width *= b.anno;
+                mtext(b, ctx, &m, rgb, lw);
+            } else {
+                mtext(b, ctx, t, rgb, lw);
+            }
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb),
         EntityKind::Dimension(dm) => {
@@ -633,7 +694,15 @@ pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
 fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32) {
     let d = ctx.d;
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
-    let g = dimension_in(d, dm);
+    let g = if style.annotative && (b.anno - 1.0).abs() > 1e-12 {
+        // Annotative dimension: its overall scale is the annotation scale.
+        let mut base = d.dim_style(&dm.style).cloned().unwrap_or_default();
+        base.scale = b.anno;
+        let st = base.with_overrides(&dm.overrides);
+        dim::dimension_geometry_with(dm, &base, b.anno, &dim_text(d, &st))
+    } else {
+        dimension_in(d, dm)
+    };
     // DIMCLRD / DIMCLRE / DIMCLRT: ByBlock = the dimension's own colour.
     let layer_name = if e.common.layer == "0" { ctx.block_layer.as_deref().unwrap_or("0") } else { e.common.layer.as_str() };
     let layer_color = d.layer(layer_name).map(|l| l.color).unwrap_or(Color::Index(7));
