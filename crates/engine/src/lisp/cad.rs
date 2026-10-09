@@ -960,6 +960,15 @@ impl Run<'_> {
                 }
             }
         }
+        // TEXT called from LISP takes one line (AutoCAD); the interactive one goes on like DTEXT.
+        if self.s.running.as_ref().is_some_and(|r| matches!(r.id.as_str(), "text" | "dtext"))
+            && self.s.current_prompt().is_some_and(|p| p.message.to_ascii_lowercase().contains("enter text"))
+            && self.s.state().is_ok_and(|st| {
+                !std::sync::Arc::ptr_eq(&st.doc, &self.s.running.as_ref().map(|r| r.before.clone()).unwrap_or_else(|| st.doc.clone()))
+            })
+        {
+            let _ = self.s.input(Input::Enter);
+        }
         Ok(V::Nil)
     }
 

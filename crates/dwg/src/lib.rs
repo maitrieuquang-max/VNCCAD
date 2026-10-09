@@ -21,7 +21,9 @@ pub fn version(bytes: &[u8]) -> Option<String> {
     is_dwg(bytes).then(|| String::from_utf8_lossy(bytes.get(0..6).unwrap_or_default()).to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// VNCCad: on every target, the web build included (acadrust keeps its memory-mapping and
+/// threads to native targets). On the web a panic can't be caught (WebAssembly aborts), so the
+/// reader's own error handling is what protects the page there.
 mod native {
     use std::io::Cursor;
 
@@ -44,17 +46,7 @@ mod native {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use native::{dwg_to_dxf, dxf_to_dwg};
-
-#[cfg(target_arch = "wasm32")]
-pub fn dwg_to_dxf(_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    Err("DWG files can't be opened in the web build yet; save as DXF".into())
-}
-#[cfg(target_arch = "wasm32")]
-pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
-    Err("DWG files can't be written in the web build yet; save as DXF".into())
-}
 
 #[cfg(test)]
 mod tests {

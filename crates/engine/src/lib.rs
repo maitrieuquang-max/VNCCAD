@@ -101,6 +101,8 @@ pub struct DocState {
     pub ucs_history: Vec<snap::Ucs2>,
     pub view_history: Vec<View>,
     pub uid: u64,
+    /// VNCCad: this tab edits a block of another drawing (BEDIT): (that drawing's uid, block).
+    pub block_edit: Option<(u64, String)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -125,6 +127,7 @@ impl DocState {
             ucs_history: Vec::new(),
             view_history: Vec::new(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            block_edit: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -301,6 +304,9 @@ pub struct Running {
     pub machine: Box<dyn Interactive>,
     pub before: Arc<Drawing>,
     pub selection_before: Vec<Handle>,
+    /// VNCCad: the drawing the command started in (a command that switches tabs — BEDIT,
+    /// BCLOSE — must not record its undo step in another drawing).
+    pub doc_uid: u64,
 }
 
 /// A pending window/crossing selection started by a click on empty space.
@@ -552,7 +558,8 @@ impl Session {
                 let st = self.state()?;
                 let before = st.doc.clone();
                 let selection_before = st.selection.clone();
-                self.running = Some(Running { id: spec.id.to_string(), machine, before, selection_before });
+                let doc_uid = st.uid;
+                self.running = Some(Running { id: spec.id.to_string(), machine, before, selection_before, doc_uid });
                 self.pending_window = None;
                 // Some commands complete immediately (e.g. ERASE with a pickfirst selection).
                 self.feed(None)?;
@@ -587,7 +594,8 @@ impl Session {
         let st = self.state()?;
         let before = st.doc.clone();
         let selection_before = st.selection.clone();
-        self.running = Some(Running { id: "lisp".into(), machine: Box::new(lisp::machine::LispM::new(job)), before, selection_before });
+        let doc_uid = st.uid;
+        self.running = Some(Running { id: "lisp".into(), machine: Box::new(lisp::machine::LispM::new(job)), before, selection_before, doc_uid });
         self.pending_window = None;
         self.feed(None)
     }
@@ -711,6 +719,7 @@ impl Session {
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
         if let Ok(st) = self.state_mut()
+            && st.uid == run.doc_uid
             && !Arc::ptr_eq(&run.before, &st.doc)
         {
             st.undo.push(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before });

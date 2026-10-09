@@ -161,6 +161,17 @@ fn scripts_run_lines() {
 }
 
 #[test]
+fn text_from_lisp_is_one_line() {
+    let mut s = Session::new();
+    ev(&mut s, "(command \"_.TEXT\" '(0 0) 2.5 0 \"C1-1\") (command \"_.CIRCLE\" '(10 10) 4)");
+    let d = s.doc().unwrap();
+    assert!(s.running.is_none());
+    let texts: Vec<String> = d.model.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect();
+    assert_eq!(texts, vec!["C1-1".to_string()]);
+    assert!(d.model.iter().any(|e| matches!(e.kind, EntityKind::Circle(_))));
+}
+
+#[test]
 fn reals_print_like_autolisp() {
     assert_eq!(fmt_real(1.23456789), "1.23457");
     assert_eq!(fmt_real(1000.0), "1000.0");
