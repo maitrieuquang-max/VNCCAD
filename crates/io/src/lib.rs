@@ -28,6 +28,15 @@ fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// VNCCad: whether bytes are a DWG file, and its DXF rendition (the web build opens DWG in
+/// steps, one per frame).
+pub fn is_dwg(bytes: &[u8]) -> bool {
+    cadcraft_dwg::is_dwg(bytes)
+}
+pub fn dwg_to_dxf(bytes: &[u8]) -> Result<Vec<u8>> {
+    cadcraft_dwg::dwg_to_dxf(bytes).map_err(IoError::Format)
+}
+
 /// Read a drawing; the format comes from the content (DXF ASCII/binary) or the name.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if cadcraft_dwg::is_dwg(bytes) {

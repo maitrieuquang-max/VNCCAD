@@ -21,7 +21,14 @@ mod web {
     const CANVAS_ID: &str = "cadcraft_canvas";
     const LOADING_ID: &str = "cadcraft_loading";
 
-    struct Shell(CadApp, Inbox);
+    /// VNCCad: a DWG being opened in steps, one per frame, so the page keeps painting (and the
+    /// browser doesn't report it as hung): announce → convert to DXF → open.
+    enum Staged {
+        Announced(String, Vec<u8>),
+        Converted(String, Vec<u8>),
+    }
+
+    struct Shell(CadApp, Inbox, Vec<Staged>);
 
     impl eframe::App for Shell {
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -51,8 +58,38 @@ mod web {
                     1
                 }
             });
+            // One heavy step per frame (files picked this frame wait for the next, so the
+            // "opening…" message gets painted first).
+            if !self.2.is_empty() {
+                let step = self.2.remove(0);
+                match step {
+                    Staged::Announced(name, bytes) => match cadcraft_io::dwg_to_dxf(&bytes) {
+                        Ok(dxf) => {
+                            self.0.set_status(format!("Đang dựng bản vẽ {name}…"));
+                            self.2.push(Staged::Converted(name, dxf));
+                        }
+                        Err(e) => {
+                            self.0.session.echo(format!("Không mở được {name}: {e}"));
+                            self.0.set_status(format!("Không mở được {name}"));
+                        }
+                    },
+                    // DXF bytes under the DWG's name: the title (and Save) keep the .dwg name.
+                    Staged::Converted(name, dxf) => {
+                        self.0.open_bytes(&name, &dxf);
+                        self.0.set_status(format!("Đã mở {name}"));
+                    }
+                }
+                ctx.request_repaint();
+            }
             for (name, bytes) in picked {
-                self.0.open_bytes(&name, &bytes);
+                if cadcraft_io::is_dwg(&bytes) {
+                    self.0.set_status(format!("Đang mở {name}… (file DWG lớn có thể mất vài giây)"));
+                    self.0.session.echo(format!("Đang mở {name}…"));
+                    self.2.push(Staged::Announced(name, bytes));
+                    ctx.request_repaint();
+                } else {
+                    self.0.open_bytes(&name, &bytes);
+                }
             }
             self.0.logic(ctx);
         }
@@ -132,6 +169,13 @@ mod web {
             location: "bộ nhớ trình duyệt (localStorage)".into(),
             put: Box::new(|key, title, path, dxf| {
                 let st = storage().ok_or("trình duyệt không cho dùng bộ nhớ")?;
+                // localStorage holds about 5 MB per site.
+                if dxf.len() > 4_500_000 {
+                    return Err(format!(
+                        "bản vẽ quá lớn ({:.1} MB) để tự lưu trong trình duyệt — hãy lưu file (Ctrl+S) thường xuyên",
+                        dxf.len() as f64 / 1e6
+                    ));
+                }
                 let text = match std::str::from_utf8(dxf) {
                     Ok(t) => t.to_string(),
                     Err(_) => format!("b64:{}", cadcraft_engine::cmd::file::base64_encode(dxf)),
@@ -229,7 +273,7 @@ mod web {
                         if query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));
                         }
-                        Ok(Box::new(Shell(app, inbox)))
+                        Ok(Box::new(Shell(app, inbox, Vec::new())))
                     }),
                 )
                 .await;
