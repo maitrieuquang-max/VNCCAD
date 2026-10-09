@@ -21,11 +21,14 @@ pub struct PenTable {
     pub name: String,
     /// Index 0 is unused; 1..=255 are the colour indices.
     pub pens: Vec<Pen>,
+    /// VNCCad: a named plot style table (STB): pens by style name (lower case). Objects use
+    /// their layer's plot style ("Normal" when unset). Empty for colour-dependent tables.
+    pub named: Vec<(String, Pen)>,
 }
 
 impl PenTable {
     fn uniform(name: &str, pen: Pen) -> PenTable {
-        PenTable { name: name.into(), pens: vec![pen; 256] }
+        PenTable { name: name.into(), pens: vec![pen; 256], named: Vec::new() }
     }
     /// Every colour plots black (VNCCad's own definition of the usual monochrome table).
     pub fn monochrome() -> PenTable {
@@ -52,6 +55,18 @@ impl PenTable {
             "grayscale" | "thang xam" | "thang xám" => Some(PenTable::grayscale()),
             _ => None,
         }
+    }
+    pub fn is_named(&self) -> bool {
+        !self.named.is_empty()
+    }
+    /// VNCCad (STB): apply the pen of plot style `style` (unknown styles plot as the object).
+    pub fn apply_named(&self, style: &str, rgb: Rgb, lw: f32) -> (Rgb, f32) {
+        let key = if style.trim().is_empty() { "normal".to_string() } else { style.trim().to_lowercase() };
+        let Some((_, p)) = self.named.iter().find(|(n, _)| *n == key) else { return (rgb, lw) };
+        let c = p.color.unwrap_or(rgb);
+        let s = f64::from(p.screen.min(100)) / 100.0;
+        let mix = |v: u8| (255.0 - (255.0 - f64::from(v)) * s).round().clamp(0.0, 255.0) as u8;
+        (Rgb(mix(c.0), mix(c.1), mix(c.2)), p.lineweight.unwrap_or(lw))
     }
     /// Apply the pen of colour index `aci` (0 = a true colour: only lineweight-free defaults).
     pub fn apply(&self, aci: u8, rgb: Rgb, lw: f32) -> (Rgb, f32) {

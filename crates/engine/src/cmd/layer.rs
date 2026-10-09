@@ -12,7 +12,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layer", "Layers", run_list).menu(&["Format", "Layers"]).alias(&["la", "layers"]).noundo(),
         CommandSpec::new("layer.new", "New Layer", run_new).params("{name, color?, linetype?, lineweight? (mm), current?: bool}"),
         CommandSpec::new("layer.set", "Set Layer Properties", run_set)
-            .params("{name, on?, frozen?, locked?, plot?, color?, linetype?, lineweight?, transparency?, description?, newVpFreeze?, newName?}"),
+            .params("{name, on?, frozen?, locked?, plot?, color?, linetype?, lineweight?, transparency?, description?, newVpFreeze?, newName?, plotStyle?: name in a .stb table}"),
         CommandSpec::new("layer.current", "Make Current", run_current)
             .menu(&["Format", "Layer Tools", "Make Current"])
             .alias(&["clayer"])
@@ -100,6 +100,10 @@ fn parse_lw(v: &Value) -> Option<Lineweight> {
 }
 
 fn apply(l: &mut Layer, p: &Value) -> Result<()> {
+    // VNCCad: plot style name (named plot style tables, STB).
+    if let Some(v) = p.get("plotStyle").and_then(Value::as_str) {
+        l.plot_style = v.trim().chars().take(255).collect();
+    }
     if let Some(v) = p.get("on").and_then(Value::as_bool) {
         l.on = v;
     }

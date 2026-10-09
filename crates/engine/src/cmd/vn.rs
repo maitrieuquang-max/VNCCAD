@@ -26,12 +26,24 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("plotstyle", "Plot Style Table", run_plotstyle)
             .menu(&["File", "Plot Style Table..."])
             .alias(&["ctb", "bangnet"])
-            .params("{name: \"monochrome\" | \"grayscale\" | \"<file>.ctb\" | \"none\"} → used by PLOT/EXPORTPDF of the current layout (or of model space)"),
+            .params("{name: \"monochrome\" | \"grayscale\" | \"<file>.ctb\" | \"<file>.stb\" (layer plot styles: LAYER.SET plotStyle) | \"none\"} → used by PLOT/EXPORTPDF of the current layout (or of model space)"),
         CommandSpec::new("plotwindow", "Plot Window to PDF", run_plotwindow)
             .menu(&["File", "Plot Window to PDF..."])
             .alias(&["vungin", "inkhung", "pw"])
             .params("{p1: [x,y], p2: [x,y], paper?: \"A3\" (A4…A0), landscape?} | {extents: true} → sets the model page setup's plot window; interactively also opens the PDF save dialog")
             .interactive(|_| Ok(Box::new(PlotWindowM::default()))),
+        CommandSpec::new("dwgversion", "DWG Version for Saving", super::file::run_dwgversion)
+            .menu(&["File", "DWG Version..."])
+            .alias(&["phienbandwg"])
+            .params("{version?: \"2000\"|\"2004\"|\"2007\"|\"2010\"|\"2013\"|\"2018\"} → the AutoCAD release DWG files are saved as (default: the one the drawing was opened in)")
+            .enabled(has_doc),
+        CommandSpec::new("cjkfont", "Font for Chinese/Japanese/Korean Text", |_s, _p| {
+            Ok(json!({ "available": cadcraft_fonts::ttf::fallback_cjk().is_some() }))
+        })
+        .menu(&["Tools", "Vietnamese", "Font for Chinese/Japanese/Korean Text"])
+        .params("{} → web: use a CJK font installed on this computer (the browser asks first)")
+        .enabled(always)
+        .noundo(),
         CommandSpec::new("shxfonts", "SHX Fonts", run_shxfonts)
             .menu(&["Tools", "Vietnamese", "SHX Fonts"])
             .params("{} → the SHX fonts loaded and the folders searched")
@@ -65,7 +77,7 @@ fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
     // Saved as a file name (AutoCAD expects "monochrome.ctb", not "monochrome").
     let value = if none {
         String::new()
-    } else if name.to_ascii_lowercase().ends_with(".ctb") {
+    } else if name.to_ascii_lowercase().ends_with(".ctb") || name.to_ascii_lowercase().ends_with(".stb") {
         name.clone()
     } else {
         format!("{name}.ctb")
@@ -305,6 +317,41 @@ mod tests {
         assert!(s.execute("plotstyle", &json!({"name": "khong-co.ctb"})).is_err());
         s.execute("plotstyle", &json!({"name": "none"})).unwrap();
         assert!(pdf_text(&mut s).contains("1 0 0 RG"));
+    }
+
+    #[test]
+    fn annotative_dimension_from_a_file_follows_the_scale() {
+        let mut s = Session::new();
+        s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [100, 0], "at": [50, 10] })).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle;
+        // As read from a DWG/DXF: the dimension carries a *D block (here a lone short line), and
+        // its style is annotative.
+        {
+            let d = s.doc_mut().unwrap();
+            let mut blk = cadcraft_doc::Block::new("*D1");
+            blk.entities.push(cadcraft_doc::Entity {
+                handle: d.new_handle(),
+                common: cadcraft_doc::Common::default(),
+                kind: cadcraft_doc::EntityKind::Line(cadcraft_doc::Line { a: cadcraft_geom::Vec3::ZERO, b: cadcraft_geom::Vec3::new(1.0, 0.0, 0.0) }),
+            });
+            d.blocks.insert("*D1".into(), std::sync::Arc::new(blk));
+            d.modify_entity(h, |e| {
+                if let cadcraft_doc::EntityKind::Dimension(dm) = &mut e.kind {
+                    dm.block = Some("*D1".into());
+                }
+            })
+            .unwrap();
+            for st in &mut d.dim_styles {
+                st.annotative = true;
+            }
+        }
+        let height =
+            |s: &Session| cadcraft_render::build(s.doc().unwrap(), &cadcraft_doc::Space::Model, &cadcraft_render::Options::default()).bounds.height();
+        // 1:1 — the stored block is drawn as it is.
+        assert!(height(&s) < 1e-6);
+        // 1:100 — the dimension is redrawn: text and arrows 100× the style size.
+        s.execute("cannoscale", &json!({ "scale": "1:100" })).unwrap();
+        assert!(height(&s) > 10.0, "{}", height(&s));
     }
 
     #[test]

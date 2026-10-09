@@ -954,3 +954,82 @@ fn pdf_plot_window_keeps_one_sheet() {
     assert!(!c.contains("0 0 1 RG") && !c.contains("1 0 0 RG") && c.contains("0 0 0 RG"));
     assert!(c.contains(" l\n"));
 }
+
+/// VNCCad: raster images are drawn into plotted PDFs (under the vectors), and PUBLISH writes
+/// one page per sheet.
+#[test]
+fn pdf_embeds_images_and_publishes_pages() {
+    let mut png = Vec::new();
+    let rgba: Vec<u8> = (0..4 * 4).flat_map(|i| if i % 2 == 0 { [255, 0, 0, 255] } else { [0, 0, 255, 128] }).collect();
+    crate::raster::encode_png_for_tests(&rgba, 4, 4, &mut png);
+    crate::raster::register("nen-test.png", png);
+    let mut d = Drawing::new_metric();
+    d.add(
+        &Space::Model,
+        Common::default(),
+        EntityKind::Image(Image {
+            insert: Vec3::ZERO,
+            u: Vec3::new(1.0, 0.0, 0.0),
+            v: Vec3::new(0.0, 1.0, 0.0),
+            size: Vec2::new(40.0, 40.0),
+            path: "nen-test.png".into(),
+        }),
+    )
+    .unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(40.0, 40.0, 0.0) })).unwrap();
+    let bytes = plot(&d, &Space::Model, &serde_json::json!({ "compress": false })).unwrap();
+    let c = check_pdf(&bytes);
+    assert!(c.contains(" cm /Im1 Do"), "image drawn");
+    assert!(c.find("/Im1 Do").unwrap() < c.find(" l\n").unwrap(), "under the vectors");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/Subtype /Image /Width 4 /Height 4"));
+    assert!(text.contains("/SMask"), "transparency kept");
+    // Two pages.
+    let sheets = vec![
+        (Space::Model, PdfOptions { window: Some(cadcraft_geom::Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(20.0, 20.0))), ..PdfOptions::default() }),
+        (Space::Model, PdfOptions::default()),
+    ];
+    let two = crate::pdf::publish(&d, &sheets, false, "test").unwrap();
+    let t = String::from_utf8_lossy(&two);
+    assert_eq!(t.matches("/Type /Page ").count(), 2);
+    assert!(t.contains("/Count 2"));
+    assert!(t.trim_end().ends_with("%%EOF"));
+}
+
+/// VNCCad: DWG is written in the drawing's version; text survives in every version.
+#[test]
+fn dwg_versions_keep_unicode_text() {
+    for (ver, magic) in [("AC1015", "AC1015"), ("AC1018", "AC1018"), ("AC1021", "AC1021"), ("AC1027", "AC1027"), ("AC1032", "AC1032")] {
+        let mut d = Drawing::new_metric();
+        d.header.set("ACADVER", HVal::Str(ver.into()));
+        d.layers.push(Layer { name: "Cầu-布局".into(), ..Layer::default() });
+        let c = Common { layer: "Cầu-布局".into(), ..Common::default() };
+        d.add(
+            &Space::Model,
+            c,
+            EntityKind::Text(
+                serde_json::from_value(serde_json::json!({ "insert": {"x":0.0,"y":0.0,"z":0.0}, "height": 2.5, "value": "Mố cầu M1 建筑面积" }))
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+        let bytes = write(&d, "t.dwg").unwrap();
+        assert!(bytes.starts_with(magic.as_bytes()), "{ver}");
+        let back = read(&bytes, "t.dwg").unwrap();
+        let texts: Vec<String> =
+            back.model.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect();
+        assert_eq!(texts, vec!["Mố cầu M1 建筑面积".to_string()], "{ver}");
+        assert!(back.layers.iter().any(|l| l.name == "Cầu-布局"), "{ver}");
+    }
+}
+
+/// VNCCad: layer plot style names (STB drawings) survive DXF.
+#[test]
+fn layer_plot_styles_round_trip() {
+    let mut d = Drawing::new_metric();
+    d.layers.push(Layer { name: "TIM".into(), plot_style: "Net dam".into(), ..Layer::default() });
+    d.layers.push(Layer { name: "PHU".into(), ..Layer::default() });
+    let back = read(&write(&d, "p.dxf").unwrap(), "p.dxf").unwrap();
+    assert_eq!(back.layer("TIM").unwrap().plot_style, "Net dam");
+    assert_eq!(back.layer("PHU").unwrap().plot_style, "Normal");
+}

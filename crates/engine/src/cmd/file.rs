@@ -135,6 +135,14 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(if new.is_empty() { format!("Đã nạp {fname}.") } else { format!("Đã nạp {fname}. Lệnh mới: {}", new.join(", ")) });
         return Ok(s.active);
     }
+    if lower_name.ends_with(".dcl") {
+        let fname = file_name(name);
+        let text = crate::lisp::machine::decode_source(bytes);
+        crate::lisp::dcl::parse(&text).map_err(|m| bad("open", format!("{fname}: {m}")))?;
+        s.lisp.files.insert(fname.to_ascii_lowercase(), text);
+        s.echo(format!("Đã nạp hộp thoại {fname} (dùng bằng load_dialog trong LISP)."));
+        return Ok(s.active);
+    }
     if lower_name.ends_with(".scr") {
         let text = crate::lisp::machine::decode_source(bytes);
         s.script(&text)?;
@@ -250,8 +258,47 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("saveas", "`path` is required"))?.to_string();
+    if let Some(v) = str_param(p, "version") {
+        set_dwg_version(s, v)?;
+    }
     let n = save_to(s, &path)?;
     Ok(json!({ "path": path, "bytes": n }))
+}
+
+/// VNCCad: the AutoCAD release DWG files of this drawing are saved as.
+fn set_dwg_version(s: &mut Session, v: &str) -> Result<String> {
+    let code = cadcraft_dwg_code(v).ok_or_else(|| bad("dwgversion", format!("phiên bản không hỗ trợ `{v}` (2000, 2004, 2007, 2010, 2013, 2018)")))?;
+    s.doc_mut()?.header.set("ACADVER", cadcraft_doc::HVal::Str(code.to_string()));
+    Ok(code.to_string())
+}
+
+fn cadcraft_dwg_code(v: &str) -> Option<&'static str> {
+    const V: &[(&str, &str)] =
+        &[("AC1015", "2000"), ("AC1018", "2004"), ("AC1021", "2007"), ("AC1024", "2010"), ("AC1027", "2013"), ("AC1032", "2018")];
+    let v = v.trim().to_ascii_uppercase();
+    V.iter().find(|(c, y)| v == *c || v == *y).map(|(c, _)| *c)
+}
+
+pub(crate) fn run_dwgversion(s: &mut Session, p: &Value) -> Result<Value> {
+    let year = |c: &str| match c {
+        "AC1015" => "2000",
+        "AC1018" => "2004",
+        "AC1021" => "2007",
+        "AC1024" => "2010",
+        "AC1027" => "2013",
+        _ => "2018",
+    };
+    match str_param(p, "version") {
+        Some(v) => {
+            let c = set_dwg_version(s, v)?;
+            Ok(json!({ "version": c, "message": format!("Lưu DWG theo định dạng AutoCAD {}.", year(&c)) }))
+        }
+        None => {
+            let c = s.doc()?.header.str("ACADVER", "AC1021");
+            let c = cadcraft_dwg_code(&c).unwrap_or("AC1021");
+            Ok(json!({ "version": c, "message": format!("DWG được lưu theo định dạng AutoCAD {} (đổi: DWGVERSION 2007…).", year(c)) }))
+        }
+    }
 }
 
 fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {

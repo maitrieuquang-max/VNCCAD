@@ -125,13 +125,14 @@ pub fn install_fonts(ctx: &egui::Context) {
                 break;
             }
         }
-        // VNCCad: Chinese/Japanese/Korean names (layers, layouts, blocks) in the UI.
-        if let Some(bytes) = cadcraft_fonts::ttf::fallback_cjk() {
-            fonts.font_data.insert("cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes.as_ref().clone())));
-            for fam in [FontFamily::Proportional, FontFamily::Monospace] {
-                if let Some(f) = fonts.families.get_mut(&fam) {
-                    f.push("cjk".into());
-                }
+    }
+    // VNCCad: Chinese/Japanese/Korean names (layers, layouts, blocks) in the UI — a system font
+    // on desktop, one given to the web app (CJKFONT, dropped font file).
+    if let Some(bytes) = cadcraft_fonts::ttf::fallback_cjk() {
+        fonts.font_data.insert("cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes.as_ref().clone())));
+        for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+            if let Some(f) = fonts.families.get_mut(&fam) {
+                f.push("cjk".into());
             }
         }
     }

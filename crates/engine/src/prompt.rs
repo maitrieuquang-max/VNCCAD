@@ -37,14 +37,21 @@ pub struct Prompt {
     pub accept: Accept,
     /// Rubber-band origin (for direct distance entry, ortho and polar).
     pub base: Option<Vec2>,
+    /// A DCL dialog to show instead of the command line (LISP `start_dialog`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialog: Option<Box<crate::lisp::dcl::Pending>>,
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, dialog: None }
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
         self.keywords = k.iter().map(|s| s.to_string()).collect();
+        self
+    }
+    pub fn dialog(mut self, d: crate::lisp::dcl::Pending) -> Self {
+        self.dialog = Some(Box::new(d));
         self
     }
     pub fn base(mut self, p: Vec2) -> Self {

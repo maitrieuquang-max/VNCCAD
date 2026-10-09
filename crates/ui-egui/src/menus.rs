@@ -103,6 +103,18 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        "cjkfont" => {
+            if cadcraft_fonts::ttf::fallback_cjk().is_some() {
+                app.session.echo("Đã có font cho chữ Trung/Nhật/Hàn.");
+            } else if let Some(f) = app.services.local_fonts.as_ref() {
+                app.session.echo("Đang xin quyền đọc font của máy (trình duyệt sẽ hỏi)…");
+                f();
+            } else {
+                app.session
+                    .echo("Không tìm thấy font có chữ Trung/Nhật/Hàn trên máy: kéo-thả một file font (ví dụ simsun.ttc, msyh.ttc) vào cửa sổ.");
+            }
+            return Some(Ok(Value::Null));
+        }
         "ui.saveas" | "saveas" if no_path => {
             let name = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing.dxf".into());
             let name = if name.contains('.') { name } else { format!("{name}.dxf") };
@@ -163,7 +175,7 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
         }
         // Only interactive invocations (menu, toolbar, command line) pick a file; JSON calls with
         // parameters keep returning base64 `data` and never open a dialog.
-        "plot" | "exportpdf" if params.is_null() => {
+        "plot" | "exportpdf" | "publish" if params.is_null() => {
             let stem = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing".into());
             let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(a, _)| a).to_string();
             let name = format!("{stem}.pdf");

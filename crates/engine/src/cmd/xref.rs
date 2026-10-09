@@ -47,11 +47,11 @@ fn file_key(path: &str) -> String {
     path.trim().rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase()
 }
 
-/// Find and read the referenced drawing.
-fn load(path: &str, base: Option<&std::path::Path>, open: &[(String, Arc<Drawing>)]) -> Option<Drawing> {
+/// The referenced drawing and the folder it was found in (where its own xrefs are looked for).
+fn load_with_dir(path: &str, base: Option<&std::path::Path>, open: &[(String, Arc<Drawing>)]) -> Option<(Drawing, Option<std::path::PathBuf>)> {
     let key = file_key(path);
     if let Some((_, d)) = open.iter().find(|(t, _)| t.to_lowercase() == key) {
-        return Some(d.as_ref().clone());
+        return Some((d.as_ref().clone(), base.map(std::path::Path::to_path_buf)));
     }
     let hooks = file::io()?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -72,14 +72,35 @@ fn load(path: &str, base: Option<&std::path::Path>, open: &[(String, Arc<Drawing
         for c in candidates {
             if let Ok(bytes) = std::fs::read(&c) {
                 let name = c.to_string_lossy().to_string();
-                return (hooks.read)(&bytes, &name).ok();
+                let dir = c.parent().map(std::path::Path::to_path_buf);
+                return (hooks.read)(&bytes, &name).ok().map(|d| (d, dir));
             }
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = base;
     let bytes = cadcraft_io::raster::bytes(path)?;
-    (hooks.read)(&bytes, path).ok()
+    (hooks.read)(&bytes, path).ok().map(|d| (d, base.map(std::path::Path::to_path_buf)))
+}
+
+/// VNCCad: resolve the xrefs inside a loaded xref (nested references), depth-first; a file
+/// already on the way down (a reference cycle) is skipped.
+fn resolve_nested(xd: &mut Drawing, dir: Option<&std::path::Path>, open: &[(String, Arc<Drawing>)], chain: &mut Vec<String>) {
+    if chain.len() > 8 {
+        return;
+    }
+    let refs: Vec<(String, String)> = xd.blocks.values().filter_map(|b| b.xref_path.clone().map(|p| (b.name.clone(), p))).collect();
+    for (name, path) in refs {
+        let key = file_key(&path);
+        if chain.contains(&key) {
+            continue;
+        }
+        if let Some((mut nd, ndir)) = load_with_dir(&path, dir, open) {
+            cadcraft_doc::vnlegacy::convert_drawing(&mut nd);
+            chain.push(key);
+            resolve_nested(&mut nd, ndir.as_deref(), open, chain);
+            chain.pop();
+            merge(xd, &name, &nd);
+        }
+    }
 }
 
 fn pre(prefix: &str, name: &str) -> String {
@@ -124,7 +145,7 @@ fn clear_dependents(d: &mut Drawing, name: &str) {
 fn merge(d: &mut Drawing, name: &str, xd: &Drawing) -> usize {
     clear_dependents(d, name);
     for l in &xd.layers {
-        if l.name != "0" && !l.name.contains('|') {
+        if l.name != "0" {
             let mut l = l.clone();
             l.name = pre(name, &l.name);
             d.layers.push(l);
@@ -141,8 +162,9 @@ fn merge(d: &mut Drawing, name: &str, xd: &Drawing) -> usize {
         d.dim_styles.push(s);
     }
     for (bn, b) in &xd.blocks {
-        if b.xref_path.is_some() {
-            continue; // nested references are not followed
+        // Nested references come along once resolved (they then hold their objects).
+        if b.xref_path.is_some() && b.entities.is_empty() {
+            continue;
         }
         let mut nb = Block::new(&pre(name, bn));
         nb.base = b.base;
@@ -175,9 +197,11 @@ pub fn resolve_all(d: &mut Drawing, base: Option<&std::path::Path>, open: &[(Str
     let refs: Vec<(String, String)> = d.blocks.values().filter_map(|b| b.xref_path.clone().map(|p| (b.name.clone(), p))).collect();
     let (mut ok, mut missing) = (Vec::new(), Vec::new());
     for (name, path) in refs {
-        match load(&path, base, open) {
-            Some(mut xd) => {
+        match load_with_dir(&path, base, open) {
+            Some((mut xd, dir)) => {
                 cadcraft_doc::vnlegacy::convert_drawing(&mut xd);
+                let mut chain = vec![file_key(&path)];
+                resolve_nested(&mut xd, dir.as_deref(), open, &mut chain);
                 merge(d, &name, &xd);
                 ok.push(name);
             }
@@ -199,8 +223,10 @@ fn run_xattach(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let base = base_dir(s);
     let open = open_docs(s);
-    let xd = load(&path, base.as_deref(), &open)
+    let (mut xd, xdir) = load_with_dir(&path, base.as_deref(), &open)
         .ok_or_else(|| bad("xattach", format!("không tìm thấy bản vẽ {path} (mở nó trong một tab khác hoặc đặt cạnh bản vẽ này)")))?;
+    let mut chain = vec![file_key(&path)];
+    resolve_nested(&mut xd, xdir.as_deref(), &open, &mut chain);
     let insert = p
         .get("insert")
         .and_then(Value::as_array)
@@ -220,7 +246,6 @@ fn run_xattach(s: &mut Session, p: &Value) -> Result<Value> {
             d.blocks.insert(name.clone(), Arc::new(b));
         }
     }
-    let mut xd = xd;
     cadcraft_doc::vnlegacy::convert_drawing(&mut xd);
     let n = merge(d, &name, &xd);
     let ins = Insert {
@@ -376,6 +401,43 @@ mod tests {
             write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
             plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
         });
+    }
+
+    #[test]
+    fn nested_xrefs_are_followed_and_cycles_stop() {
+        install_io();
+        if file::io().is_none_or(|h| (h.read)(b"0\nEOF\n", "x.dxf").is_err()) {
+            return; // another test installed hooks that can't read files
+        }
+        let dir = std::env::temp_dir().join(format!("vnccad-xref-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        // child.dxf: a line on layer COC. parent.dxf: references child.dxf (and itself: a cycle).
+        let mut child = Drawing::new_metric();
+        child
+            .add(
+                &cadcraft_doc::Space::Model,
+                Common { layer: "COC".into(), ..Common::default() },
+                EntityKind::Line(cadcraft_doc::Line { a: Vec3::ZERO, b: Vec3::new(5.0, 0.0, 0.0) }),
+            )
+            .unwrap();
+        std::fs::write(dir.join("child.dxf"), cadcraft_io::write(&child, "child.dxf").unwrap()).unwrap();
+        let mut s = Session::new();
+        s.execute("xattach", &json!({ "path": dir.join("child.dxf").to_string_lossy(), "insert": [0, 0] })).unwrap();
+        s.execute("xattach", &json!({ "path": dir.join("parent.dxf").to_string_lossy(), "insert": [0, 0] })).ok();
+        let mut parent = s.doc().unwrap().clone();
+        parent.blocks.retain(|k, _| !k.contains('|'));
+        if let Some(b) = parent.blocks.get_mut("child") {
+            Arc::make_mut(b).entities = cadcraft_doc::EntityStore::new();
+        }
+        std::fs::write(dir.join("parent.dxf"), cadcraft_io::write(&parent, "parent.dxf").unwrap()).unwrap();
+        let mut host = Session::new();
+        let r = host.execute("xattach", &json!({ "path": dir.join("parent.dxf").to_string_lossy(), "insert": [100, 0] })).unwrap();
+        assert!(r["entities"].as_u64().unwrap() >= 1);
+        let d = host.doc().unwrap();
+        let nested = d.blocks.keys().find(|k| k.eq_ignore_ascii_case("parent|child")).cloned().expect("nested xref block");
+        assert_eq!(d.blocks[&nested].entities.len(), 1);
+        assert!(d.layer("parent|child|COC").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

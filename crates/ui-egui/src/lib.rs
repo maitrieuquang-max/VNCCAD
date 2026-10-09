@@ -14,6 +14,7 @@ pub mod chrome;
 pub mod cmdline;
 pub mod control;
 pub mod credits;
+pub mod dcl_ui;
 pub mod dialogs;
 pub mod gpu;
 pub mod icons;
@@ -101,6 +102,9 @@ pub struct Services {
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// VNCCad: where autosaves are kept (a folder on desktop, browser storage on the web).
     pub autosave: Option<autosave::AutosaveStore>,
+    /// VNCCad web: ask the browser for a CJK font installed on this computer (Local Font
+    /// Access); the font arrives later through [`CadApp::open_bytes`].
+    pub local_fonts: Option<Box<dyn Fn()>>,
 }
 
 pub struct CadApp {
@@ -197,6 +201,26 @@ impl CadApp {
         }
     }
 
+    /// VNCCad: a drawing with Chinese/Japanese/Korean text but no font for it here.
+    pub fn hint_missing_cjk(&mut self) {
+        if cadcraft_fonts::ttf::fallback_cjk().is_some() {
+            return;
+        }
+        let cjk = |s: &str| s.chars().any(|c| matches!(u32::from(c), 0x3040..=0x30FF | 0x3400..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF));
+        let has = self.session.doc().is_ok_and(|d| {
+            d.model.iter().take(200_000).any(|e| match &e.kind {
+                cadcraft_doc::EntityKind::Text(t) => cjk(&t.value),
+                cadcraft_doc::EntityKind::MText(t) => cjk(&t.contents),
+                _ => false,
+            })
+        });
+        if has {
+            self.session.echo(
+                "Bản vẽ có chữ Trung/Nhật/Hàn nhưng chưa có font để hiển thị: gõ CJKFONT để dùng font của máy (SimSun, Microsoft YaHei…), hoặc kéo-thả một file font (ví dụ simsun.ttc).",
+            );
+        }
+    }
+
     pub fn set_status(&mut self, s: impl Into<String>) {
         self.status = Some((s.into(), now_ms()));
     }
@@ -207,11 +231,18 @@ impl CadApp {
             canvas::reload_images(self);
         }
         let data = cadcraft_engine::cmd::file::base64_encode(bytes);
+        let lower = name.to_ascii_lowercase();
+        let font = [".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
+        let support = font || [".lsp", ".dcl", ".scr", ".shx", ".ctb", ".stb"].iter().any(|e| lower.ends_with(e));
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
             self.set_status(e);
-        } else {
+        } else if font {
+            // The interface picks up CJK letters from the new font too.
+            self.styled = false;
+        } else if !support {
             self.ui.start_tab = false;
             self.canvas.zoom_pending = true;
+            self.hint_missing_cjk();
         }
     }
 
@@ -222,7 +253,7 @@ impl CadApp {
         } else {
             let lower = path.to_ascii_lowercase();
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
-            let support = [".lsp", ".scr", ".shx", ".ctb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
+            let support = [".lsp", ".dcl", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
             if !support {
                 self.ui.start_tab = false;
                 self.canvas.zoom_pending = true;
@@ -315,6 +346,7 @@ impl CadApp {
         autosave::recovery_dialog(self, ui.ctx());
         xattach_dialog(self, ui.ctx());
         road_dialog(self, ui.ctx());
+        dcl_ui::show(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

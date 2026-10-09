@@ -96,7 +96,7 @@ fn value<'a>(entry: &'a str, key: &str) -> Option<&'a str> {
 pub fn parse(name: &str, bytes: &[u8]) -> Option<PenTable> {
     let text = body(bytes)?;
     let styles = group(&text, "plot_style")?;
-    let weights: Vec<f32> = group(&text, "custom_lineweight_table")
+    let weights: Vec<(usize, f32)> = group(&text, "custom_lineweight_table")
         .map(|g| {
             let mut v: Vec<(usize, f32)> = g
                 .lines()
@@ -106,13 +106,21 @@ pub fn parse(name: &str, bytes: &[u8]) -> Option<PenTable> {
                 })
                 .collect();
             v.sort_by_key(|x| x.0);
-            v.into_iter().map(|x| x.1).collect()
+            v
         })
         .unwrap_or_default();
-    let mut t = PenTable { name: name.to_string(), pens: vec![Pen { color: None, lineweight: None, screen: 100 }; 256] };
+    let mut t = PenTable { name: name.to_string(), pens: vec![Pen { color: None, lineweight: None, screen: 100 }; 256], named: Vec::new() };
+    let stb = text.contains("aci_table_available=FALSE") || name.to_ascii_lowercase().ends_with(".stb");
     let mut seen = 0;
     for (n, e) in entries(styles) {
-        let Some(pen) = t.pens.get_mut(n + 1) else { continue };
+        // STB: entries carry their style name ("Normal", "Style 1"…).
+        let mut named_pen = Pen { color: None, lineweight: None, screen: 100 };
+        let pen = if stb {
+            &mut named_pen
+        } else {
+            let Some(pen) = t.pens.get_mut(n + 1) else { continue };
+            pen
+        };
         seen += 1;
         if let Some(c) = value(e, "color").and_then(|v| v.parse::<i64>().ok()) {
             let c = c as u32;
@@ -122,10 +130,16 @@ pub fn parse(name: &str, bytes: &[u8]) -> Option<PenTable> {
             }
         }
         if let Some(i) = value(e, "lineweight").and_then(|v| v.parse::<usize>().ok()) {
-            pen.lineweight = weights.get(i).copied().filter(|w| w.is_finite() && *w > 0.0);
+            pen.lineweight = weights.iter().find(|(k, _)| *k == i).map(|x| x.1).filter(|w| w.is_finite() && *w > 0.0);
         }
         if let Some(sc) = value(e, "screen").and_then(|v| v.parse::<u8>().ok()) {
             pen.screen = sc.min(100);
+        }
+        if stb {
+            let style = value(e, "name").unwrap_or("").to_lowercase();
+            if !style.is_empty() {
+                t.named.push((style, named_pen));
+            }
         }
     }
     (seen > 0).then_some(t)
@@ -138,10 +152,8 @@ pub fn find(name: &str) -> Result<PenTable, String> {
     if let Some(t) = PenTable::builtin(name) {
         return Ok(t);
     }
-    if name.to_ascii_lowercase().ends_with(".stb") {
-        return Err(format!("{name}: bảng nét in theo tên (STB) chưa được hỗ trợ, hãy dùng CTB"));
-    }
-    let file = if name.to_ascii_lowercase().ends_with(".ctb") { name.to_string() } else { format!("{name}.ctb") };
+    let lower = name.to_ascii_lowercase();
+    let file = if lower.ends_with(".ctb") || lower.ends_with(".stb") { name.to_string() } else { format!("{name}.ctb") };
     let bytes = crate::raster::bytes(&file).or_else(|| user_dir_file(&file)).ok_or_else(|| format!("không tìm thấy bảng nét in {file}"))?;
     parse(&file, &bytes).ok_or_else(|| format!("{file}: không đọc được bảng nét in"))
 }
@@ -227,6 +239,13 @@ pub(crate) mod tests {
         crate::raster::register("cong-ty.ctb", make_ctb(&sample()));
         assert_eq!(find("cong-ty").unwrap().pens[1].lineweight, Some(0.7));
         assert!(find("khong-co.ctb").is_err());
-        assert!(find("named.stb").is_err());
+        assert!(find("named.stb").is_err(), "missing file");
+        // An STB: pens by style name.
+        let stb = "description=\"\"\naci_table_available=FALSE\nplot_style{\n 0{\n  name=\"Normal\n  color=-1006632961\n  lineweight=255\n  screen=100\n }\n 1{\n  name=\"Net dam\n  color=-1040187392\n  lineweight=5\n  screen=100\n }\n}\ncustom_lineweight_table{\n 5=0.7\n}\n";
+        crate::raster::register("cty.stb", make_ctb(stb));
+        let t = find("cty.stb").unwrap();
+        assert!(t.is_named());
+        assert_eq!(t.apply_named("Net dam", Rgb(255, 0, 0), 0.25), (Rgb(0, 0, 0), 0.7));
+        assert_eq!(t.apply_named("", Rgb(255, 0, 0), 0.25), (Rgb(255, 0, 0), 0.25), "Normal: as the object");
     }
 }

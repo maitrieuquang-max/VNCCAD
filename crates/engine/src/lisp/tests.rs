@@ -179,3 +179,110 @@ fn reals_print_like_autolisp() {
     assert_eq!(fmt_real(-2.25), "-2.25");
     assert_eq!(fmt_real(123456.789), "123457.0");
 }
+
+#[test]
+fn vlax_curve_and_vla_properties() {
+    let mut s = Session::new();
+    // A road centreline: 100 straight, then a 90° arc of radius 50 (bulge tan(22.5°)).
+    s.execute("pline", &json!({ "points": [[0, 0], [100, 0], [150, 50]] })).unwrap();
+    let h = s.doc().unwrap().model.last().unwrap().handle;
+    let b = (22.5f64).to_radians().tan();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::LwPolyline(p) = &mut e.kind {
+                p.vertices[1].bulge = b;
+            }
+        })
+        .unwrap();
+    ev(&mut s, "(setq tim (vlax-ename->vla-object (entlast)))");
+    let len = 100.0 + 50.0 * std::f64::consts::FRAC_PI_2;
+    let got: f64 = ev(&mut s, "(vlax-curve-getDistAtParam tim (vlax-curve-getEndParam tim))").parse().unwrap();
+    assert!((got - len).abs() < 1e-3, "{got}");
+    assert_eq!(ev(&mut s, "(vlax-curve-getEndParam tim)"), "2.0");
+    // Km0+050 lies on the straight; Km0+120 on the arc.
+    assert_eq!(ev(&mut s, "(vlax-curve-getPointAtDist tim 50.0)"), "(50.0 0.0 0.0)");
+    let p = ev(&mut s, "(setq p (vlax-curve-getPointAtDist tim 120.0))");
+    assert!(p.starts_with('('));
+    let d: f64 = ev(&mut s, "(vlax-curve-getDistAtPoint tim p)").parse().unwrap();
+    assert!((d - 120.0).abs() < 1e-3, "{d}");
+    // Closest point and offset distance of a point beside the road.
+    assert_eq!(ev(&mut s, "(vlax-curve-getClosestPointTo tim '(30 7))"), "(30.0 0.0 0.0)");
+    assert_eq!(ev(&mut s, "(vlax-curve-getStartPoint tim)"), "(0.0 0.0 0.0)");
+    assert_eq!(ev(&mut s, "(vlax-curve-isClosed tim)"), "nil");
+    // Tangent on the straight.
+    assert_eq!(ev(&mut s, "(vlax-curve-getFirstDeriv tim 0.5)"), "(100.0 0.0 0.0)");
+    // Properties.
+    assert!((ev(&mut s, "(vla-get-Length tim)").parse::<f64>().unwrap() - len).abs() < 1e-3);
+    ev(&mut s, "(vla-put-Layer tim \"TIM-TUYEN\") (vla-put-Color tim 1)");
+    assert_eq!(ev(&mut s, "(vla-get-Layer tim)"), "\"TIM-TUYEN\"");
+    assert_eq!(ev(&mut s, "(vlax-get tim 'Color)"), "1");
+    assert_eq!(ev(&mut s, "(vla-get-ObjectName tim)"), "\"AcDbPolyline\"");
+    // Adding objects to model space.
+    ev(&mut s, "(setq ms (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))");
+    ev(&mut s, "(setq c (vla-AddCircle ms (vlax-3d-point '(5 5)) 2.0))");
+    assert_eq!(ev(&mut s, "(vla-get-Radius c)"), "2.0");
+    ev(&mut s, "(setq tx (vla-AddText ms \"Km0+120\" (vlax-3d-point p) 2.5))");
+    assert_eq!(ev(&mut s, "(vla-get-TextString tx)"), "\"Km0+120\"");
+    // A circle's curve functions.
+    assert!((ev(&mut s, "(vlax-curve-getArea c)").parse::<f64>().unwrap() - 4.0 * std::f64::consts::PI).abs() < 1e-3);
+    assert!(eval_quiet(&mut s, "(vla-get-Radius tim)").is_err(), "a polyline has no radius");
+    assert!(eval_quiet(&mut s, "(vla-SomethingElse tim)").is_err());
+}
+
+const COC_DCL: &str = r#"
+// Hộp thoại chọn cọc
+coc : dialog {
+  label = "Bố trí cọc";
+  : edit_box { key = "kc"; label = "Khoảng cách"; value = "3"; }
+  : popup_list { key = "loai"; label = "Loại cọc"; }
+  : toggle { key = "ghi"; label = "Ghi số hiệu"; value = "1"; }
+  : radio_row { key = "kieu"; : radio_button { key = "tron"; value = "1"; } : radio_button { key = "vuong"; } }
+  : text { key = "msg"; }
+  ok_cancel;
+}
+"#;
+
+const COC_LSP: &str = r#"
+(defun c:coc (/ id st)
+  (setq id (load_dialog "coc.dcl"))
+  (new_dialog "coc" id)
+  (start_list "loai") (mapcar 'add_list '("D300" "D400" "D500")) (end_list)
+  (set_tile "loai" "1")
+  (setq kieu0 (get_tile "kieu"))
+  (action_tile "ghi" "(set_tile \"msg\" (strcat \"ghi=\" $value))")
+  (action_tile "accept" "(setq kc (atof (get_tile \"kc\")) loai (atoi (get_tile \"loai\"))) (done_dialog 1)")
+  (setq st (start_dialog))
+  (unload_dialog id)
+  (setq ketqua st)
+  (princ))
+"#;
+
+#[test]
+fn dcl_dialog_round_trip() {
+    let mut s = Session::new();
+    s.execute("open", &json!({ "data": crate::cmd::file::base64_encode(COC_DCL.as_bytes()), "name": "coc.dcl" })).unwrap();
+    s.execute("appload", &json!({ "text": COC_LSP, "name": "coc.lsp" })).unwrap();
+    s.cmdline("COC").unwrap();
+    let p = s.current_prompt().expect("dialog prompt");
+    let d = p.dialog.expect("dialog");
+    assert_eq!(d.lists.get("loai").map(Vec::len), Some(3));
+    assert_eq!(d.values.get("loai").map(String::as_str), Some("1"));
+    assert_eq!(d.values.get("kc").map(String::as_str), Some("3"));
+    assert_eq!(d.dialog.children.last().map(|t| t.kind.as_str()), Some("ok_cancel"));
+    // A tile with an action: the action runs and the dialog stays up with the new values.
+    s.input(crate::Input::Text(json!({"pressed":"ghi","values":{"ghi":"0"}}).to_string())).unwrap();
+    let d = s.current_prompt().and_then(|p| p.dialog).expect("still open");
+    assert_eq!(d.values.get("msg").map(String::as_str), Some("ghi=0"));
+    assert_eq!(d.round, 1);
+    s.input(crate::Input::Text(json!({"pressed":"accept","values":{"kc":"4.5","loai":"2","ghi":"0"}}).to_string())).unwrap();
+    assert!(s.running.is_none(), "{:?}", s.current_prompt());
+    assert_eq!(ev(&mut s, "kc"), "4.5");
+    assert_eq!(ev(&mut s, "loai"), "2");
+    assert_eq!(ev(&mut s, "ketqua"), "1");
+    assert_eq!(ev(&mut s, "kieu0"), "\"tron\"");
+    // Cancel: status 0, the accept action does not run.
+    s.cmdline("COC").unwrap();
+    s.input(crate::Input::Text(json!({"pressed":"cancel","values":{}}).to_string())).unwrap();
+    assert_eq!(ev(&mut s, "ketqua"), "0");
+}

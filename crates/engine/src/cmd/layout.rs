@@ -990,8 +990,9 @@ mod tests {
     #[test]
     fn plot_goes_through_the_hook() {
         super::super::file::set_io(super::super::file::IoHooks {
-            read: |_, _| Err("no reader in tests".into()),
-            write: |_, _| Err("no writer in tests".into()),
+            // Real readers/writers: other tests share these process-wide hooks.
+            read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
+            write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
             plot: Some(fake_plot),
         });
         let mut s = session_with_model();

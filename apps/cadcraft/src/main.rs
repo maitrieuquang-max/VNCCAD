@@ -58,10 +58,10 @@ fn services() -> Services {
                 .add_filter("Drawing (DXF, DWG)", &["dxf", "dwg"])
                 .add_filter(
                     "Tất cả VNCCad mở được",
-                    &["dxf", "dwg", "lsp", "scr", "shx", "ctb", "ttf", "ttc", "otf", "png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"],
+                    &["dxf", "dwg", "lsp", "dcl", "scr", "shx", "ctb", "ttf", "ttc", "otf", "png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"],
                 )
                 .add_filter("Font SHX", &["shx"])
-                .add_filter("AutoLISP, Script", &["lsp", "scr"])
+                .add_filter("AutoLISP, DCL, Script", &["lsp", "dcl", "scr"])
                 .add_filter("Ảnh, PDF nền", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"])
                 .add_filter("All files", &["*"])
                 .pick_file()
@@ -87,6 +87,7 @@ fn services() -> Services {
         request_open: None,
         download: None,
         autosave: autosave_store::store(),
+        local_fonts: None,
     }
 }
 

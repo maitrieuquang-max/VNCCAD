@@ -11,6 +11,12 @@
 pub const VERSIONS: &[(&str, &str)] =
     &[("AC1015", "2000"), ("AC1018", "2004"), ("AC1021", "2007"), ("AC1024", "2010"), ("AC1027", "2013"), ("AC1032", "2018")];
 
+/// A DWG version code from a code (`"AC1027"`) or a release year (`"2013"`).
+pub fn version_code(v: &str) -> Option<&'static str> {
+    let v = v.trim().to_ascii_uppercase();
+    VERSIONS.iter().find(|(code, year)| v == *code || v == *year).map(|(code, _)| *code)
+}
+
 /// True when the bytes look like a DWG file (`AC10xx` magic).
 pub fn is_dwg(bytes: &[u8]) -> bool {
     bytes.len() > 6 && bytes.starts_with(b"AC10") && bytes.get(4..6).is_some_and(|v| v.iter().all(u8::is_ascii_digit))
@@ -38,15 +44,25 @@ mod native {
 
     /// Convert DXF bytes into a DWG file.
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
+        dxf_to_dwg_version(dxf, None)
+    }
+
+    /// VNCCad: convert DXF bytes into a DWG file of a given version code (`"AC1032"`…); `None`
+    /// keeps the version the DXF says. Text is Unicode from AutoCAD 2007 (AC1021) on.
+    pub fn dxf_to_dwg_version(dxf: &[u8], version: Option<&str>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
-        let doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
+        let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
+        if let Some(v) = version {
+            let code = super::version_code(v).ok_or_else(|| format!("phiên bản DWG không hỗ trợ: {v} (2000, 2004, 2007, 2010, 2013, 2018)"))?;
+            doc.version = acadrust::types::DxfVersion::parse(code).ok_or_else(|| format!("phiên bản DWG không hỗ trợ: {v}"))?;
+        }
         acadrust::DwgWriter::write_to_vec(&doc).map_err(|e| format!("DWG write: {e}"))
     }
 }
 
-pub use native::{dwg_to_dxf, dxf_to_dwg};
+pub use native::{dwg_to_dxf, dxf_to_dwg, dxf_to_dwg_version};
 
 #[cfg(test)]
 mod tests {

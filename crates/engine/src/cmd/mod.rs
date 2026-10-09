@@ -19,6 +19,7 @@ pub mod lisp;
 mod modify;
 mod modify2;
 mod props;
+pub mod publish;
 mod qselect;
 pub mod raster;
 pub mod road;
@@ -178,6 +179,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(ucs::specs());
         v.extend(lisp::specs());
         v.extend(bedit::specs());
+        v.extend(publish::specs());
         v.extend(raster::specs());
         v.extend(xref::specs());
         v.extend(road::specs());

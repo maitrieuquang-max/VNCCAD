@@ -51,7 +51,21 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 | Sửa block | `BEDIT` (`BE`: chọn block hoặc gõ tên), `REFEDIT` (chọn block), `BSAVE`, `BCLOSE` (Yes/No) | Block mở trong thẻ riêng, dùng mọi lệnh vẽ/sửa; BSAVE cập nhật mọi block cùng tên trong bản vẽ gốc (một bước Undo ở bản vẽ gốc) |
 | Script | `SCRIPT` hoặc kéo-thả `.scr` | Như AutoCAD: dấu cách/xuống dòng là Enter; dòng `(…)` chạy LISP |
 
-Giới hạn LISP: chưa có ActiveX (`vla-*`, `vlax-*`), hộp thoại DCL, reactor; `entmake` hỗ trợ LINE, CIRCLE, ARC, POINT, LWPOLYLINE, TEXT, MTEXT, INSERT. Lệnh LISP được chạy lại từ đầu sau mỗi lần nhập (phát lại các câu trả lời trước) — với chương trình hỏi hàng trăm lần có thể chậm.
+Giới hạn LISP: chưa có reactor (`vlr-*`) và đối tượng ActiveX ngoài phần đã liệt kê ở Giai đoạn 4; `entmake` hỗ trợ LINE, CIRCLE, ARC, POINT, LWPOLYLINE, TEXT, MTEXT, INSERT. Lệnh LISP được chạy lại từ đầu sau mỗi lần nhập (phát lại các câu trả lời trước) — với chương trình hỏi hàng trăm lần có thể chậm.
+
+### Giai đoạn 4 – in hàng loạt, Visual LISP, DCL
+
+| Hạng mục | Lệnh / cách dùng | Ghi chú |
+|---|---|---|
+| In hàng loạt | `PUBLISH` (`INHANGLOAT`, `BATCHPLOT`): mọi layout, hoặc tự tìm khung tên (block chèn nhiều lần, lớn nhất) trong Model → một file PDF nhiều trang | Thứ tự trang trái→phải, trên→dưới; khổ mặc định A3 cho khung tên, chọn được khổ/bảng nét. `publish.sheets` xem trước danh sách tờ |
+| Ảnh/PDF nền khi in | `PLOT`, `PLOTWINDOW`, `EXPORTPDF`, `PUBLISH` | Ảnh nhúng vào PDF (giữ trong suốt), nằm dưới nét vẽ, cắt theo viewport |
+| Phiên bản DWG khi lưu | `DWGVERSION 2000/2004/2007/2010/2013/2018` hoặc `SAVEAS` với `version` | Mặc định AutoCAD 2007 (AC1021). Đã kiểm tra lưu-mở lại đủ chữ Việt và chữ Trung ở mọi phiên bản |
+| Xref lồng nhau | `XATTACH`, `XREF reload` | Theo xref bên trong xref tới 8 cấp, chặn vòng lặp; layer phụ thuộc giữ tên `A\|B\|LAYER` |
+| Bảng nét in theo tên (STB) | `PLOTSTYLE <file>.stb`; kéo-thả `.stb`; layer có thuộc tính `plotStyle` | Đọc kiểu in gán cho layer trong DXF/DWG (ACAD_PLOTSTYLENAME) và ghi lại khi lưu |
+| Kích thước annotative từ file | `CANNOSCALE` | Kích thước annotative đọc từ file được dựng lại theo tỷ lệ chú thích (không còn cố định theo block `*D`) |
+| Chữ Trung/Nhật/Hàn trên web | `CJKFONT` | Trình duyệt Chrome/Edge: lấy font CJK của máy (SimSun, Microsoft YaHei…) sau khi bạn cho phép; trình duyệt khác: kéo-thả file font. Khi mở bản vẽ có chữ CJK mà thiếu font, dòng lệnh sẽ nhắc |
+| Visual LISP | `vlax-curve-*` (getStartParam/EndParam, getStartPoint/EndPoint, getDistAtParam, getParamAtDist, getPointAtDist/Param, getClosestPointTo, getFirstDeriv, getArea, isClosed…), `vla-get-*/vla-put-*`, `vlax-get-property/put-property`, `vlax-ename->vla-object`, `vlax-3d-point`, `vla-AddLine/AddCircle/AddText/AddLightWeightPolyline`, `vla-delete` | Dùng được cho line, arc, circle, polyline (tham số = chỉ số đỉnh như AutoCAD), spline/ellipse (theo xấp xỉ). Thường dùng để rải cọc, cắm cọc theo tuyến |
+| Hộp thoại DCL | `load_dialog`, `new_dialog`, `set_tile/get_tile/get_attr`, `action_tile`, `mode_tile`, `start_list/add_list/end_list`, `start_dialog/done_dialog/term_dialog/unload_dialog`; nạp `.dcl` bằng kéo-thả hoặc mở file (bản desktop đọc được cả đường dẫn ghi trong `load_dialog`) | Hiện: dialog, row/column (boxed), edit_box, popup_list, list_box, toggle, radio_button, button, text, slider, ok_cancel… Tile có `action_tile` chạy ngay khi đổi giá trị, hộp thoại giữ nguyên tới `done_dialog`. Ảnh trong hộp thoại (`slide_image`, `vector_image`) chưa vẽ |
 
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
@@ -75,10 +89,9 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 - DWG trên bản web: đã bật đọc/ghi (cùng bộ đọc với bản desktop) nhưng chưa được thử trên trình duyệt thật; nếu trang báo lỗi với một file DWG, mở bằng bản desktop rồi lưu DXF. Bản vẽ rất lớn trên web có thể chậm hơn desktop.
 - Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
-- Bảng nét in theo tên (STB) chưa hỗ trợ; Xref lồng nhau (xref bên trong xref) không được nạp; ảnh/PDF nền chưa in ra PDF khi PLOT.
-- Bản web không có font hệ thống: chữ Trung/Nhật/Hàn chỉ hiện khi kéo-thả kèm một font có các chữ đó (ví dụ `simsun.ttc`).
-- Bản vẽ lưu DWG ra định dạng AutoCAD 2000 (mở được bằng mọi bản AutoCAD từ 2000).
-- Kích thước annotative chỉ áp dụng khi kích thước được dựng lại trong VNCCad (kích thước đọc từ file kèm block `*D` vẽ theo block đó).
+- Bản web: lấy font CJK của máy chỉ có trên Chrome/Edge (API Local Font Access); các trình duyệt khác cần kéo-thả file font.
+- AutoLISP chưa có reactor (`vlr-*`); hộp thoại DCL chưa vẽ ảnh (`slide_image`, `vector_image`).
+- Lưu DWG từ AutoCAD 2010 trở lên làm mất ô gộp của bảng (TABLE) — vì thế mặc định lưu bản 2007.
 
 ## Build
 
@@ -123,4 +136,4 @@ Sau khi mở trang lần đầu, Chrome/Edge sẽ hiện nút **Cài đặt** tr
 ## Lộ trình tiếp theo
 
 - **Giai đoạn 2:** VN2000/UTM, nhập/xuất KML, nền bản đồ vệ tinh, đường đồng mức (chuyển từ DXF Toolkit), giao diện tiếng Việt.
-- **Tiếp theo:** in ảnh/PDF nền ra PDF, STB, block editor và dynamic block, AutoLISP hoặc bộ lệnh tự động hóa thay thế.
+- **Tiếp theo:** dynamic block (tham số, hành động), reactor AutoLISP, sheet set.

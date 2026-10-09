@@ -115,6 +115,8 @@ pub fn fallback_cjk() -> Option<Arc<Vec<u8>>> {
         return Some(f);
     }
     const NAMES: &[&str] = &[
+        // Given to the web app (CJKFONT)
+        "cjk-local",
         // Windows
         "simsun",
         "msyh",

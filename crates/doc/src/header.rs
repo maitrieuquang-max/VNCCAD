@@ -88,7 +88,7 @@ impl Header {
 
     fn common() -> Header {
         let mut h = Header::default();
-        h.set_str("ACADVER", "AC1032");
+        h.set_str("ACADVER", "AC1021");
         h.set_str("CLAYER", "0");
         h.set_i64("CECOLOR", 256);
         h.set_str("CELTYPE", "ByLayer");

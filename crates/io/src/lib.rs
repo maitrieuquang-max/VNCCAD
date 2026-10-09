@@ -54,7 +54,12 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
 pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     match ext(name).as_str() {
         "dxf" | "" => Ok(dxf_write::write(d).into_bytes()),
-        "dwg" => cadcraft_dwg::dxf_to_dwg(dxf_write::write(d).as_bytes()).map_err(IoError::Format),
+        // VNCCad: the drawing's version (the one it was opened in, or SAVEAS's choice).
+        "dwg" => {
+            let v = d.header.str("ACADVER", "AC1021");
+            let v = cadcraft_dwg::version_code(&v).unwrap_or("AC1021");
+            cadcraft_dwg::dxf_to_dwg_version(dxf_write::write(d).as_bytes(), Some(v)).map_err(IoError::Format)
+        }
         "svg" => Ok(svg::export(d, &Space::Model).into_bytes()),
         "png" => png(d, &Space::Model, 2400, 1600),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, ..PdfOptions::default() }),

@@ -98,12 +98,68 @@ mod web {
         }
     }
 
+    /// VNCCad: a CJK font installed on this computer, through the browser's Local Font Access
+    /// (Chrome/Edge ask the user first). The font lands in `inbox` as `cjk-local.ttc`.
+    fn local_cjk_font(inbox: &Inbox, ctx: &egui::Context) {
+        use wasm_bindgen::JsValue;
+        const WANTED: [&str; 10] = [
+            "SimSun",
+            "MicrosoftYaHei",
+            "SimHei",
+            "NSimSun",
+            "DengXian-Regular",
+            "MS-Gothic",
+            "MalgunGothic",
+            "PingFangSC-Regular",
+            "NotoSansCJKsc-Regular",
+            "NotoSansSC-Regular",
+        ];
+        let (inbox, ctx) = (inbox.clone(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(window) = web_sys::window() else { return };
+            let Ok(f) = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")) else { return };
+            let Some(f) = f.dyn_ref::<js_sys::Function>() else {
+                log::warn!("queryLocalFonts is not available in this browser");
+                return;
+            };
+            let Ok(p) = f.call0(&window) else { return };
+            let Ok(p) = p.dyn_into::<js_sys::Promise>() else { return };
+            let Ok(list) = wasm_bindgen_futures::JsFuture::from(p).await else {
+                log::warn!("local font access was refused");
+                return;
+            };
+            let list = js_sys::Array::from(&list);
+            let name_of =
+                |v: &JsValue| js_sys::Reflect::get(v, &JsValue::from_str("postscriptName")).ok().and_then(|n| n.as_string()).unwrap_or_default();
+            let mut chosen: Option<JsValue> = None;
+            for want in WANTED {
+                if let Some(v) = list.iter().find(|v| name_of(v).eq_ignore_ascii_case(want)) {
+                    chosen = Some(v);
+                    break;
+                }
+            }
+            let Some(font) = chosen else {
+                log::warn!("no CJK font among the local fonts");
+                return;
+            };
+            let Ok(blob_fn) = js_sys::Reflect::get(&font, &JsValue::from_str("blob")) else { return };
+            let Some(blob_fn) = blob_fn.dyn_ref::<js_sys::Function>() else { return };
+            let Ok(p) = blob_fn.call0(&font).and_then(|p| p.dyn_into::<js_sys::Promise>()) else { return };
+            let Ok(blob) = wasm_bindgen_futures::JsFuture::from(p).await else { return };
+            let Ok(blob) = blob.dyn_into::<web_sys::Blob>() else { return };
+            let Ok(buf) = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await else { return };
+            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+            inbox.borrow_mut().push(("cjk-local.ttc".into(), bytes));
+            ctx.request_repaint();
+        });
+    }
+
     /// VNCCad: show the browser's file picker; the chosen drawing lands in `inbox`.
     fn request_open(inbox: &Inbox, ctx: &egui::Context) {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
         let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
         input.set_type("file");
-        input.set_accept(".dxf,.dwg,.shx,.lsp,.scr,.ttf,.otf,.ttc,.ctb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
+        input.set_accept(".dxf,.dwg,.shx,.lsp,.dcl,.scr,.ttf,.otf,.ttc,.ctb,.stb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
         let (inbox, ctx, picker) = (inbox.clone(), ctx.clone(), input.clone());
         input.set_multiple(true);
         let on_change = Closure::once_into_js(move || {
@@ -260,10 +316,12 @@ mod web {
                     Box::new(move |cc| {
                         let inbox: Inbox = Rc::new(RefCell::new(Vec::new()));
                         let (ib, ctx) = (inbox.clone(), cc.egui_ctx.clone());
+                        let (ib2, ctx2) = (inbox.clone(), cc.egui_ctx.clone());
                         let services = Services {
                             request_open: Some(Box::new(move || request_open(&ib, &ctx))),
                             download: Some(Box::new(download)),
                             autosave: autosave_store(),
+                            local_fonts: Some(Box::new(move || local_cjk_font(&ib2, &ctx2))),
                             ..Services::default()
                         };
                         let mut app = CadApp::new(Session::new(), services);

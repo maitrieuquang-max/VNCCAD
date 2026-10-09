@@ -36,6 +36,10 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
+    // VNCCad: a LISP dialog takes Enter/Escape itself.
+    if app.session.current_prompt().is_some_and(|p| p.dialog.is_some()) {
+        return;
+    }
     let events = ctx.input(|i| i.events.clone());
     // A hot grip takes Space/Enter (cycle mode, or apply a typed point) and Escape.
     if app.canvas.hot_grip.is_some() {

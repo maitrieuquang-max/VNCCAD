@@ -406,8 +406,12 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool, pens: Option<&pens::PenTable>)
                 Color::ByBlock => ctx.block_color,
                 c => c,
             };
-            let aci = if let Color::Index(i) = eff { i } else { 0 };
-            t.apply(aci, rgb, lw_mm)
+            if t.is_named() {
+                t.apply_named(layer.map_or("", |l| l.plot_style.as_str()), rgb, lw_mm)
+            } else {
+                let aci = if let Color::Index(i) = eff { i } else { 0 };
+                t.apply(aci, rgb, lw_mm)
+            }
         }
         None => (rgb, lw_mm),
     };
@@ -476,7 +480,10 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb),
         EntityKind::Dimension(dm) => {
-            if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
+            // VNCCad: an annotative dimension read from a file is redrawn at the current
+            // annotation scale instead of from its stored (*D) block.
+            let rescale = (b.anno - 1.0).abs() > 1e-12 && ctx.d.dim_style(&dm.style).is_some_and(|s| s.annotative);
+            if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n)).filter(|_| !rescale)
                 && ctx.depth < cadcraft_doc::MAX_BLOCK_DEPTH
             {
                 let sub = sub_ctx(ctx, e, Mat3::IDENTITY);

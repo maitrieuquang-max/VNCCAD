@@ -162,6 +162,111 @@ impl Map {
 
 /// Write a one-page vector PDF of a space.
 pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
+    let page = plot_page(d, space, o)?;
+    let title = page.title.clone();
+    Ok(assemble_pages(&[page], o.compress, &title))
+}
+
+/// VNCCad (PUBLISH): several sheets — layouts, or windows of model space — in one PDF, one page
+/// each, in the order given.
+pub fn publish(d: &Drawing, sheets: &[(Space, PdfOptions)], compress: bool, title: &str) -> Result<Vec<u8>> {
+    if sheets.is_empty() {
+        return Err(IoError::Format("không có tờ nào để in".into()));
+    }
+    let mut pages = Vec::with_capacity(sheets.len());
+    for (space, o) in sheets.iter().take(500) {
+        pages.push(plot_page(d, space, o)?);
+    }
+    Ok(assemble_pages(&pages, compress, title))
+}
+
+/// A raster image placed on a page.
+struct PdfImage {
+    width: u32,
+    height: u32,
+    rgba: std::sync::Arc<Vec<u8>>,
+}
+
+/// One plotted page before it is written into the file.
+struct PageOut {
+    media: Vec2,
+    content: String,
+    images: Vec<PdfImage>,
+    title: String,
+}
+
+/// VNCCad: raster images (and PDF underlays) of the plotted space — and of model space seen
+/// through the layout's viewports — as `cm … Do` operations drawn under the vectors.
+fn image_ops(d: &Drawing, space: &Space, map: &Map, images: &mut Vec<PdfImage>, keys: &mut Vec<String>) -> String {
+    let mut ops = String::new();
+    let visible = |e: &cadcraft_doc::Entity| d.layer(&e.common.layer).is_none_or(|l| l.on && !l.frozen && l.plot);
+    let mut place = |ops: &mut String, im: &cadcraft_doc::Image, to_paper: &dyn Fn(Vec2) -> Vec2, clip: Option<(Vec2, Vec2)>| {
+        let key = crate::raster::file_key(&im.path);
+        let idx = match keys.iter().position(|k| *k == key) {
+            Some(i) => i,
+            None => {
+                let Some(dec) = crate::raster::decoded(&im.path) else { return };
+                if dec.width == 0 || dec.height == 0 || dec.rgba.len() < (dec.width * dec.height * 4) as usize {
+                    return;
+                }
+                images.push(PdfImage { width: dec.width, height: dec.height, rgba: std::sync::Arc::new(dec.rgba.clone()) });
+                keys.push(key);
+                images.len() - 1
+            }
+        };
+        let o = im.insert.xy();
+        let u = im.u.xy() * im.size.x;
+        let v = im.v.xy() * im.size.y;
+        let (po, pu, pv) = (map.pt(to_paper(o)), map.pt(to_paper(o + u)), map.pt(to_paper(o + v)));
+        let (a, b) = (pu - po, pv - po);
+        if ![a.x, a.y, b.x, b.y, po.x, po.y].iter().all(|x| x.is_finite()) {
+            return;
+        }
+        ops.push_str("q\n");
+        if let Some((c0, c1)) = clip {
+            let (q0, q1) = (map.pt(c0), map.pt(c1));
+            pt(ops, Vec2::new(q0.x.min(q1.x), q0.y.min(q1.y)));
+            ops.push(' ');
+            num(ops, (q1.x - q0.x).abs());
+            ops.push(' ');
+            num(ops, (q1.y - q0.y).abs());
+            ops.push_str(" re W n\n");
+        }
+        for x in [a.x, a.y, b.x, b.y, po.x, po.y] {
+            num(ops, x);
+            ops.push(' ');
+        }
+        let _ = writeln!(ops, "cm /Im{} Do\nQ", idx + 1);
+    };
+    if let Some(store) = d.space(space) {
+        for e in store.iter().filter(|e| visible(e)) {
+            if let cadcraft_doc::EntityKind::Image(im) = &e.kind {
+                place(&mut ops, im, &|p| p, None);
+            }
+        }
+        // Model-space images through the layout's viewports.
+        if matches!(space, Space::Paper(_)) {
+            for e in store.iter().filter(|e| visible(e)) {
+                let cadcraft_doc::EntityKind::Viewport(vp) = &e.kind else { continue };
+                if vp.id == 1 || vp.height <= 1e-12 || vp.view_height <= 1e-12 {
+                    continue;
+                }
+                let k = vp.height / vp.view_height;
+                let c = vp.center.xy();
+                let to_paper = move |p: Vec2| c + (p - vp.view_center) * k;
+                let clip = (c - Vec2::new(vp.width, vp.height) / 2.0, c + Vec2::new(vp.width, vp.height) / 2.0);
+                for m in d.model.iter().filter(|m| visible(m) && !vp.frozen_layers.iter().any(|f| f.eq_ignore_ascii_case(&m.common.layer))) {
+                    if let cadcraft_doc::EntityKind::Image(im) = &m.kind {
+                        place(&mut ops, im, &to_paper, Some(clip));
+                    }
+                }
+            }
+        }
+    }
+    ops
+}
+
+fn plot_page(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<PageOut> {
     let mut page = page_for(d, space, o)?;
     let window = o.window.or_else(|| page.window.filter(|_| page.plot_area == "window").and_then(|w| window_of(&w)));
     // A window given with the plot turns the paper to match its shape.
@@ -210,7 +315,14 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
         }
         None => clip_pt,
     };
-    let content = content_stream(&list, &map, &clip_pt);
+    let mut content = content_stream(&list, &map, &clip_pt);
+    let mut images = Vec::new();
+    let ops = image_ops(d, space, &map, &mut images, &mut Vec::new());
+    if !ops.is_empty()
+        && let Some(at) = content.find(" re W n\n")
+    {
+        content.insert_str(at + " re W n\n".len(), &ops);
+    }
     let title = if o.title.is_empty() {
         match space {
             Space::Model => "Model".to_string(),
@@ -219,7 +331,7 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
     } else {
         o.title.clone()
     };
-    Ok(assemble(media, content.as_bytes(), o.compress, &title))
+    Ok(PageOut { media, content, images, title })
 }
 
 /// Paper units per drawing unit for a plot.
@@ -400,37 +512,89 @@ fn pdf_string(s: &str) -> String {
 }
 
 /// Assemble the file: header, five objects, cross-reference table and trailer.
-fn assemble(media: Vec2, content: &[u8], compress: bool, title: &str) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(content.len() + 1024);
+/// Write pages into a PDF file.
+fn assemble_pages(pages: &[PageOut], compress: bool, title: &str) -> Vec<u8> {
+    let pack = |data: &[u8]| -> (Vec<u8>, &'static str) {
+        if compress { (miniz_oxide::deflate::compress_to_vec_zlib(data, 6), " /Filter /FlateDecode") } else { (data.to_vec(), "") }
+    };
+    let stream = |dict: String, data: &[u8]| -> Vec<u8> {
+        let mut out = dict.into_bytes();
+        out.extend_from_slice(b"\nstream\n");
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\nendstream");
+        out
+    };
+    // Object bodies; object n is objs[n - 1]. 1 = catalog, 2 = page tree (filled in last).
+    let mut objs: Vec<Vec<u8>> = vec![Vec::new(), Vec::new()];
+    let mut kids = Vec::new();
+    for p in pages {
+        let (data, filter) = pack(p.content.as_bytes());
+        objs.push(stream(format!("<< /Length {}{filter} >>", data.len()), &data));
+        let content_ref = objs.len();
+        let mut xobjects = String::new();
+        for (i, im) in p.images.iter().enumerate() {
+            let n = (im.width as usize) * (im.height as usize);
+            let rgb: Vec<u8> = im.rgba.chunks_exact(4).take(n).flat_map(|c| [c[0], c[1], c[2]]).collect();
+            let alpha: Vec<u8> = im.rgba.chunks_exact(4).take(n).map(|c| c[3]).collect();
+            let smask = if alpha.iter().any(|a| *a < 255) {
+                let (data, filter) = pack(&alpha);
+                objs.push(stream(
+                    format!(
+                        "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {}{filter} >>",
+                        im.width,
+                        im.height,
+                        data.len()
+                    ),
+                    &data,
+                ));
+                format!(" /SMask {} 0 R", objs.len())
+            } else {
+                String::new()
+            };
+            let (data, filter) = pack(&rgb);
+            objs.push(stream(
+                format!(
+                    "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8{smask} /Length {}{filter} >>",
+                    im.width,
+                    im.height,
+                    data.len()
+                ),
+                &data,
+            ));
+            let _ = write!(xobjects, "/Im{} {} 0 R ", i + 1, objs.len());
+        }
+        let mut mb = String::new();
+        num(&mut mb, p.media.x);
+        mb.push(' ');
+        num(&mut mb, p.media.y);
+        let resources = if xobjects.is_empty() { "<< >>".to_string() } else { format!("<< /XObject << {xobjects}>> >>") };
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {mb}] /Resources {resources} /Contents {content_ref} 0 R >>").into_bytes());
+        kids.push(objs.len());
+    }
+    objs.push(format!("<< /Producer (VNCCad) /Creator (VNCCad) /Title {} >>", pdf_string(title)).into_bytes());
+    let info = objs.len();
+    if let Some(c) = objs.get_mut(0) {
+        *c = b"<< /Type /Catalog /Pages 2 0 R >>".to_vec();
+    }
+    if let Some(t) = objs.get_mut(1) {
+        let k: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
+        *t = format!("<< /Type /Pages /Kids [{}] /Count {} >>", k.join(" "), kids.len()).into_bytes();
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(objs.iter().map(Vec::len).sum::<usize>() + 1024);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
+    let mut offsets = Vec::with_capacity(objs.len());
+    for (i, body) in objs.iter().enumerate() {
         offsets.push(out.len());
-        let n = offsets.len();
-        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
-    };
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
-    obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-    let mut mb = String::new();
-    num(&mut mb, media.x);
-    mb.push(' ');
-    num(&mut mb, media.y);
-    obj(&mut out, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {mb}] /Resources << >> /Contents 4 0 R >>").as_bytes());
-    let (data, filter) =
-        if compress { (miniz_oxide::deflate::compress_to_vec_zlib(content, 6), " /Filter /FlateDecode") } else { (content.to_vec(), "") };
-    let mut stream = format!("<< /Length {}{filter} >>\nstream\n", data.len()).into_bytes();
-    stream.extend_from_slice(&data);
-    stream.extend_from_slice(b"\nendstream");
-    obj(&mut out, &stream);
-    obj(&mut out, format!("<< /Producer (CADCraft) /Creator (CADCraft) /Title {} >>", pdf_string(title)).as_bytes());
+    }
     let xref = out.len();
     let mut x = format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1);
     for o in &offsets {
         let _ = writeln!(x, "{o:010} 00000 n ");
     }
-    let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1);
+    let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info {info} 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1);
     out.extend_from_slice(x.as_bytes());
     out
 }

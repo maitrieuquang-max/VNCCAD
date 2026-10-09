@@ -755,6 +755,11 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(tc) = t.i(420) {
                     l.color = Color::True(Rgb::from_u32(tc as u32));
                 }
+                // VNCCad: plot style name (STB drawings) — a handle into ACAD_PLOTSTYLENAME,
+                // resolved with the objects.
+                if let Some(h) = t.s(390).filter(|h| !h.trim().is_empty()) {
+                    l.plot_style = format!("\u{1}{}", h.trim().to_ascii_uppercase());
+                }
                 match d.layer_mut(&name) {
                     Some(x) => *x = l,
                     None => d.layers.push(l),
@@ -1049,7 +1054,7 @@ impl Objects {
                     self.imagedefs.insert(h.clone(), if page > 1 { format!("{file}#{page}") } else { file });
                 }
             }
-            "DICTIONARY" => {
+            "DICTIONARY" | "ACDBDICTIONARYWDFLT" => {
                 let mut name: Option<String> = None;
                 for t in tags {
                     match t.code {
@@ -1116,6 +1121,12 @@ impl Objects {
                 continue;
             }
             d.groups.push(Group { name, description: t.s(300).unwrap_or_default(), selectable: t.i(71).unwrap_or(1) != 0, members });
+        }
+        // VNCCad: layer plot style names.
+        for l in d.layers.iter_mut() {
+            if let Some(h) = l.plot_style.strip_prefix('\u{1}') {
+                l.plot_style = self.names.get(h).cloned().unwrap_or_default();
+            }
         }
         // VNCCad settings.
         let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::SETTINGS_KEY).map(|(h, _)| h.clone());

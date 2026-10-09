@@ -17,7 +17,9 @@
 
 mod builtins;
 mod cad;
+pub mod dcl;
 pub mod machine;
+mod vla;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
@@ -410,6 +412,8 @@ pub struct Lisp {
     pub next_set: u64,
     /// Source texts given to the app (APPLOAD, dropped `.lsp` files), by lower-case file name.
     pub files: HashMap<String, String>,
+    /// Loaded DCL files (`load_dialog` id, definitions).
+    pub dcl: Vec<(i64, Vec<(String, dcl::Tile)>)>,
 }
 
 impl Lisp {
@@ -441,6 +445,7 @@ pub struct Run<'a> {
     out: String,
     initget: (i64, Vec<String>),
     depth: usize,
+    pub(crate) dialog: Option<dcl::Building>,
 }
 
 const MAX_STEPS: u64 = 20_000_000;
@@ -448,7 +453,7 @@ const MAX_DEPTH: usize = 400;
 
 impl<'a> Run<'a> {
     pub fn new(s: &'a mut Session, lisp: &'a mut Lisp, inputs: VecDeque<Input>, interactive: bool) -> Self {
-        Run { s, lisp, inputs, interactive, frames: Vec::new(), steps: 0, out: String::new(), initget: (0, Vec::new()), depth: 0 }
+        Run { s, lisp, inputs, interactive, frames: Vec::new(), steps: 0, out: String::new(), initget: (0, Vec::new()), depth: 0, dialog: None }
     }
 
     /// Text printed so far (not yet on the command line).

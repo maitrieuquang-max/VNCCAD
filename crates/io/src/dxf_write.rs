@@ -1192,6 +1192,19 @@ pub fn write(d: &Drawing) -> String {
     let constraints_xrec = w.h();
     let settings = dxf_ext::settings_lines(d);
     let settings_xrec = w.h();
+    // VNCCad: named plot styles used by layers (STB drawings): ACAD_PLOTSTYLENAME entries.
+    let mut pstyles: Vec<(String, String)> = Vec::new();
+    if d.layers.iter().any(|l| !l.plot_style.trim().is_empty() && !l.plot_style.eq_ignore_ascii_case("normal")) {
+        let mut names = vec!["Normal".to_string()];
+        for l in &d.layers {
+            let n = l.plot_style.trim();
+            if !n.is_empty() && !names.iter().any(|x| x.eq_ignore_ascii_case(n)) {
+                names.push(n.to_string());
+            }
+        }
+        pstyles = names.into_iter().map(|n| (n, w.h())).collect();
+    }
+    let pstyle_dict = w.h();
     let model_layout = w.h();
     let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
 
@@ -1302,6 +1315,12 @@ pub fn write(d: &Drawing) -> String {
             w.i(290, 0);
         }
         w.i(370, i64::from(l.lineweight.to_dxf()));
+        if !pstyles.is_empty() {
+            let n = if l.plot_style.trim().is_empty() { "Normal" } else { l.plot_style.trim() };
+            if let Some((_, h)) = pstyles.iter().find(|(x, _)| x.eq_ignore_ascii_case(n)) {
+                w.s(390, h.clone());
+            }
+        }
     }
     w.s(0, "ENDTAB");
     // STYLE
@@ -1514,6 +1533,10 @@ pub fn write(d: &Drawing) -> String {
         w.s(3, dxf_ext::SETTINGS_KEY);
         w.s(350, settings_xrec.clone());
     }
+    if !pstyles.is_empty() {
+        w.s(3, "ACAD_PLOTSTYLENAME");
+        w.s(350, pstyle_dict.clone());
+    }
     w.s(0, "DICTIONARY");
     w.s(5, group_dict.clone());
     w.s(330, root_dict.clone());
@@ -1567,6 +1590,24 @@ pub fn write(d: &Drawing) -> String {
         w.i(280, 1);
         for c in chunks {
             w.s(1, c.clone());
+        }
+    }
+    if !pstyles.is_empty() {
+        w.s(0, "ACDBDICTIONARYWDFLT");
+        w.s(5, pstyle_dict.clone());
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(281, 1);
+        for (n, h) in &pstyles {
+            w.s(3, n.clone());
+            w.s(350, h.clone());
+        }
+        w.s(100, "AcDbDictionaryWithDefault");
+        w.s(340, pstyles.first().map(|x| x.1.clone()).unwrap_or_default());
+        for (_, h) in &pstyles {
+            w.s(0, "ACDBPLACEHOLDER");
+            w.s(5, h.clone());
+            w.s(330, pstyle_dict.clone());
         }
     }
     if !settings.is_empty() {
