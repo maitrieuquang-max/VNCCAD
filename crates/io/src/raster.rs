@@ -71,7 +71,7 @@ fn file_part(path: &str) -> &str {
 pub fn pdf_page_size(bytes: &[u8], page: usize) -> Option<(f64, f64)> {
     let pdf = hayro::hayro_syntax::Pdf::new(bytes.to_vec()).ok()?;
     let pages = pdf.pages();
-    let p = pages.iter().nth(page.checked_sub(1)?)?;
+    let p = pages.get(page.checked_sub(1)?)?;
     let (w, h) = p.render_dimensions();
     (w > 0.0 && h > 0.0).then_some((f64::from(w), f64::from(h)))
 }
@@ -84,7 +84,7 @@ pub fn pdf_page_count(bytes: &[u8]) -> usize {
 fn decode_pdf(bytes: &[u8], page: usize) -> Option<Decoded> {
     let pdf = hayro::hayro_syntax::Pdf::new(bytes.to_vec()).ok()?;
     let pages = pdf.pages();
-    let p = pages.iter().nth(page.checked_sub(1)?)?;
+    let p = pages.get(page.checked_sub(1)?)?;
     let (w, h) = p.render_dimensions();
     if !(w > 0.0 && h > 0.0) {
         return None;
