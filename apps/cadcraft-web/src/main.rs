@@ -39,7 +39,18 @@ mod web {
                     }
                 });
             }
-            let picked: Vec<(String, Vec<u8>)> = self.1.borrow_mut().drain(..).collect();
+            let mut picked: Vec<(String, Vec<u8>)> = self.1.borrow_mut().drain(..).collect();
+            // World files and fonts before the images and drawings that use them.
+            picked.sort_by_key(|(n, _)| {
+                let n = n.to_ascii_lowercase();
+                if cadcraft_io::raster::is_image_name(&n) {
+                    2
+                } else if n.ends_with(".dxf") || n.ends_with(".dwg") {
+                    3
+                } else {
+                    1
+                }
+            });
             for (name, bytes) in picked {
                 self.0.open_bytes(&name, &bytes);
             }
@@ -55,21 +66,26 @@ mod web {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
         let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
         input.set_type("file");
-        input.set_accept(".dxf,.dwg,.shx,.DXF,.DWG,.SHX");
+        input.set_accept(".dxf,.dwg,.shx,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld");
         let (inbox, ctx, picker) = (inbox.clone(), ctx.clone(), input.clone());
+        input.set_multiple(true);
         let on_change = Closure::once_into_js(move || {
-            let Some(file) = picker.files().and_then(|f| f.get(0)) else { return };
-            let name = file.name();
-            wasm_bindgen_futures::spawn_local(async move {
-                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-                    Ok(buf) => {
-                        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-                        inbox.borrow_mut().push((name, bytes));
-                        ctx.request_repaint();
+            let Some(files) = picker.files() else { return };
+            for i in 0..files.length().min(32) {
+                let Some(file) = files.get(i) else { continue };
+                let name = file.name();
+                let (inbox, ctx) = (inbox.clone(), ctx.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                        Ok(buf) => {
+                            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+                            inbox.borrow_mut().push((name, bytes));
+                            ctx.request_repaint();
+                        }
+                        Err(e) => log::error!("reading {name} failed: {e:?}"),
                     }
-                    Err(e) => log::error!("reading {name} failed: {e:?}"),
-                }
-            });
+                });
+            }
         });
         input.set_onchange(Some(on_change.unchecked_ref()));
         input.click();

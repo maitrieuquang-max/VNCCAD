@@ -57,6 +57,7 @@ fn services() -> Services {
             rfd::FileDialog::new()
                 .add_filter("Drawing (DXF, DWG)", &["dxf", "dwg"])
                 .add_filter("Font SHX", &["shx"])
+                .add_filter("Ảnh (PNG, JPEG, BMP, TIFF)", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"])
                 .add_filter("All files", &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
@@ -70,6 +71,12 @@ fn services() -> Services {
                 .add_filter("SVG", &["svg"])
                 .add_filter("PNG", &["png"])
                 .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        pick_image: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Ảnh (PNG, JPEG, BMP, TIFF)", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"])
+                .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
         request_open: None,

@@ -865,3 +865,26 @@ fn mleader_is_written_as_leader_and_mtext() {
     assert!(back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_))));
     assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MText(t) if t.contents == "Note")));
 }
+
+#[test]
+fn image_entities_round_trip_with_their_file() {
+    let mut d = Drawing::new_metric();
+    let im = Image {
+        insert: Vec3::new(100.0, 200.0, 0.0),
+        u: Vec3::new(0.5, 0.0, 0.0),
+        v: Vec3::new(0.0, 0.5, 0.0),
+        size: Vec2::new(640.0, 480.0),
+        path: "D:\\Du an\\Anh ve tinh.jpg".into(),
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Image(im.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Image { insert: Vec3::new(0.0, 0.0, 0.0), ..im.clone() })).unwrap();
+    let text = crate::write_dxf(&d);
+    assert!(text.contains("ACAD_IMAGE_DICT") && text.contains("IMAGEDEF_REACTOR") && text.contains("AcDbRasterImage"));
+    // The CLASSES entry plus one IMAGEDEF object for the shared file.
+    assert_eq!(text.matches("\nIMAGEDEF\n").count() + text.matches("\r\nIMAGEDEF\r\n").count(), 2, "one IMAGEDEF per file");
+    let back = crate::read_dxf(text.as_bytes()).unwrap();
+    let imgs: Vec<Image> = back.model.iter().filter_map(|e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None }).collect();
+    assert_eq!(imgs.len(), 2);
+    assert!(imgs.iter().all(|i| i.path == im.path && i.size == im.size && i.u == im.u));
+    assert!(imgs.iter().any(|i| i.insert == im.insert));
+}

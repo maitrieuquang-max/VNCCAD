@@ -14,6 +14,8 @@ cadcraft-color = { workspace = true }
 cadcraft-doc = { workspace = true }
 cadcraft-render = { workspace = true }
 cadcraft-engine = { workspace = true }
+# VNCCad: decoded raster images for IMAGE entities.
+cadcraft-io = { workspace = true }
 egui = { workspace = true }
 # GPU canvas paint callback (same egui-wgpu/wgpu eframe uses with its "wgpu" feature).
 egui-wgpu = { workspace = true }

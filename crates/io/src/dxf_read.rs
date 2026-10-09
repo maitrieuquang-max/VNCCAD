@@ -299,7 +299,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
         "IMAGE" => {
-            EntityKind::Image(Image { insert: t.p(10), u: t.p(11), v: t.p(12), size: Vec2::new(t.fd(13, 1.0), t.fd(23, 1.0)), path: String::new() })
+            // The file path lives on the IMAGEDEF object (340); resolved after OBJECTS is read.
+            EntityKind::Image(Image {
+                insert: t.p(10),
+                u: t.p(11),
+                v: t.p(12),
+                size: Vec2::new(t.fd(13, 1.0), t.fd(23, 1.0)),
+                path: t.s(340).map(|h| format!("{IMAGEDEF_REF}{}", h.trim().to_ascii_uppercase())).unwrap_or_default(),
+            })
         }
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
@@ -917,7 +924,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.model.push(e);
         }
     }
+    let imagedefs = std::mem::take(&mut objs.imagedefs);
     objs.apply(&mut d, &rx);
+    resolve_image_paths(&mut d, &imagedefs);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
     if let Some(h) = Handle::parse_hex(&seed) {
@@ -927,6 +936,37 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     Ok(d)
+}
+
+/// Marks an IMAGE path that still names its IMAGEDEF by handle.
+const IMAGEDEF_REF: char = '\u{1}';
+
+/// Replace IMAGEDEF handles in IMAGE paths by the file names the IMAGEDEF objects hold.
+fn resolve_image_paths(d: &mut Drawing, defs: &HashMap<String, String>) {
+    fn fix(store: &mut cadcraft_doc::EntityStore, defs: &HashMap<String, String>) {
+        let hs: Vec<Handle> =
+            store.iter().filter(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with(IMAGEDEF_REF))).map(|e| e.handle).collect();
+        for h in hs {
+            store.modify(h, |e| {
+                if let EntityKind::Image(i) = &mut e.kind {
+                    let key = i.path.trim_start_matches(IMAGEDEF_REF).to_string();
+                    i.path = defs.get(&key).cloned().unwrap_or_default();
+                }
+            });
+        }
+    }
+    fix(&mut d.model, defs);
+    for l in &mut d.layouts {
+        fix(&mut l.entities, defs);
+    }
+    let names: Vec<String> = d.blocks.keys().cloned().collect();
+    for n in names {
+        if let Some(b) = d.blocks.get_mut(&n)
+            && b.entities.iter().any(|e| matches!(&e.kind, EntityKind::Image(i) if i.path.starts_with(IMAGEDEF_REF)))
+        {
+            fix(&mut std::sync::Arc::make_mut(b).entities, defs);
+        }
+    }
 }
 
 /// Non-graphical objects applied once every entity is placed.
@@ -940,6 +980,8 @@ struct Objects {
     table_styles: Vec<(String, Vec<Tag>)>,
     /// DIMASSOC objects.
     dimassocs: Vec<Vec<Tag>>,
+    /// IMAGEDEF handle (upper case) → image file path.
+    imagedefs: HashMap<String, String>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -948,6 +990,11 @@ impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
+            "IMAGEDEF" => {
+                if self.imagedefs.len() < MAX_OBJECTS {
+                    self.imagedefs.insert(h.clone(), T(tags).s(1).unwrap_or_default());
+                }
+            }
             "DICTIONARY" => {
                 let mut name: Option<String> = None;
                 for t in tags {

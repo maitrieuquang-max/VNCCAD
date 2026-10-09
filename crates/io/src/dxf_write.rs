@@ -104,6 +104,20 @@ struct Ctx {
     tables: HashMap<Handle, (String, String)>,
     /// Table style name → TABLESTYLE handle (the first is the fallback).
     table_styles: Vec<(String, String)>,
+    /// IMAGE entity → (IMAGEDEF handle, IMAGEDEF_REACTOR handle).
+    images: HashMap<Handle, (String, String)>,
+    /// One IMAGEDEF per file: (handle, path, pixel size, [(reactor, image)]).
+    image_defs: Vec<ImageDefObj>,
+    /// ACAD_IMAGE_DICT and RASTERVARIABLES handles (when there are images).
+    image_dict: Option<(String, String)>,
+}
+
+#[derive(Default)]
+struct ImageDefObj {
+    handle: String,
+    path: String,
+    size: (f64, f64),
+    reactors: Vec<(String, String)>,
 }
 
 impl Ctx {
@@ -764,6 +778,32 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(90, if v.locked { 16384 } else { 0 });
         }
         // Not yet written: images, wipeouts, tables, multileaders, unknown objects.
+        EntityKind::Image(im) => {
+            let Some((def, reactor)) = cx.images.get(&e.handle).cloned() else { return };
+            w.s(0, "IMAGE");
+            common(w, e, owner, paper, "AcDbRasterImage");
+            w.i(90, 0);
+            w.p(10, im.insert);
+            w.p(11, im.u);
+            w.p(12, im.v);
+            w.f(13, im.size.x);
+            w.f(23, im.size.y);
+            w.s(340, def);
+            // Show image, show when not aligned with the screen.
+            w.i(70, 3);
+            w.i(280, 0);
+            w.i(281, 50);
+            w.i(282, 50);
+            w.i(283, 0);
+            w.s(360, reactor);
+            // Rectangular clip boundary = the whole image (pixel-corner coordinates).
+            w.i(71, 1);
+            w.i(91, 2);
+            w.f(14, -0.5);
+            w.f(24, -0.5);
+            w.f(14, im.size.x - 0.5);
+            w.f(24, im.size.y - 0.5);
+        }
         _ => {}
     }
 }
@@ -1066,6 +1106,26 @@ pub fn write(d: &Drawing) -> String {
             }
         }
     }
+    // VNCCad: raster images: one IMAGEDEF per file, one reactor per IMAGE.
+    for e in &every {
+        if let EntityKind::Image(im) = &e.kind {
+            let pos = match cx.image_defs.iter().position(|x| x.path.eq_ignore_ascii_case(&im.path)) {
+                Some(p) => p,
+                None => {
+                    cx.image_defs.push(ImageDefObj { handle: w.h(), path: im.path.clone(), size: (im.size.x, im.size.y), reactors: Vec::new() });
+                    cx.image_defs.len() - 1
+                }
+            };
+            let reactor = w.h();
+            if let Some(def) = cx.image_defs.get_mut(pos) {
+                def.reactors.push((reactor.clone(), e.handle.hex()));
+                cx.images.insert(e.handle, (def.handle.clone(), reactor));
+            }
+        }
+    }
+    if !cx.image_defs.is_empty() {
+        cx.image_dict = Some((w.h(), w.h()));
+    }
     let default_table_style = [TableStyle::default()];
     let table_styles: &[TableStyle] = if d.table_styles.is_empty() { &default_table_style } else { &d.table_styles };
     cx.table_styles = table_styles.iter().map(|s| (s.name.clone(), w.h())).collect();
@@ -1102,6 +1162,12 @@ pub fn write(d: &Drawing) -> String {
     w.s(0, "SECTION");
     w.s(2, "CLASSES");
     let mut classes = vec![("TABLESTYLE", "AcDbTableStyle", 4095, false)];
+    if !cx.image_defs.is_empty() {
+        classes.push(("IMAGE", "AcDbRasterImage", 127, true));
+        classes.push(("IMAGEDEF", "AcDbRasterImageDef", 0, false));
+        classes.push(("IMAGEDEF_REACTOR", "AcDbRasterImageDefReactor", 1, false));
+        classes.push(("RASTERVARIABLES", "AcDbRasterVariables", 0, false));
+    }
     if !cx.tables.is_empty() {
         classes.push(("ACAD_TABLE", "AcDbTable", 1025, true));
     }
@@ -1112,7 +1178,7 @@ pub fn write(d: &Drawing) -> String {
         w.s(0, "CLASS");
         w.s(1, dxf_name);
         w.s(2, cpp);
-        w.s(3, "ObjectDBX Classes");
+        w.s(3, if dxf_name.starts_with("IMAGE") || dxf_name == "RASTERVARIABLES" { "ISM" } else { "ObjectDBX Classes" });
         w.i(90, proxy);
         w.i(280, 0);
         w.i(281, i64::from(is_entity));
@@ -1350,6 +1416,12 @@ pub fn write(d: &Drawing) -> String {
     w.s(350, group_dict.clone());
     w.s(3, "ACAD_LAYOUT");
     w.s(350, layout_dict.clone());
+    if let Some((img_dict, vars)) = &cx.image_dict {
+        w.s(3, "ACAD_IMAGE_DICT");
+        w.s(350, img_dict.clone());
+        w.s(3, "ACAD_IMAGE_VARS");
+        w.s(350, vars.clone());
+    }
     w.s(3, "ACAD_TABLESTYLE");
     w.s(350, table_style_dict.clone());
     if constraint_chunks.is_some() {
@@ -1384,6 +1456,61 @@ pub fn write(d: &Drawing) -> String {
         w.i(280, 1);
         for c in chunks {
             w.s(1, c.clone());
+        }
+    }
+    // Raster images: ACAD_IMAGE_DICT, RASTERVARIABLES, IMAGEDEF and IMAGEDEF_REACTOR objects.
+    if let Some((img_dict, vars)) = cx.image_dict.clone() {
+        w.s(0, "DICTIONARY");
+        w.s(5, img_dict.clone());
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(281, 1);
+        let mut used: Vec<String> = Vec::new();
+        for def in &cx.image_defs {
+            let base = crate::raster::file_key(&def.path);
+            let base = base.rsplit_once('.').map_or(base.clone(), |(a, _)| a.to_string());
+            let mut name = if base.is_empty() { "image".to_string() } else { base };
+            let mut n = 1;
+            while used.iter().any(|u| u.eq_ignore_ascii_case(&name)) {
+                n += 1;
+                name = format!("{name}_{n}");
+            }
+            used.push(name.clone());
+            w.s(3, name);
+            w.s(350, def.handle.clone());
+        }
+        w.s(0, "RASTERVARIABLES");
+        w.s(5, vars);
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbRasterVariables");
+        w.i(90, 0);
+        w.i(70, 1);
+        w.i(71, 1);
+        w.i(72, 0);
+        for def in &cx.image_defs {
+            w.s(0, "IMAGEDEF");
+            w.s(5, def.handle.clone());
+            let mut reactors: Vec<&str> = vec![img_dict.as_str()];
+            reactors.extend(def.reactors.iter().map(|(r, _)| r.as_str()));
+            w.group("ACAD_REACTORS", 330, &reactors);
+            w.s(330, img_dict.clone());
+            w.s(100, "AcDbRasterImageDef");
+            w.i(90, 0);
+            w.s(1, def.path.clone());
+            w.f(10, def.size.0);
+            w.f(20, def.size.1);
+            w.f(11, 1.0);
+            w.f(21, 1.0);
+            w.i(280, 1);
+            w.i(281, 0);
+            for (reactor, image) in &def.reactors {
+                w.s(0, "IMAGEDEF_REACTOR");
+                w.s(5, reactor.clone());
+                w.s(330, image.clone());
+                w.s(100, "AcDbRasterImageDefReactor");
+                w.i(90, 2);
+                w.s(330, image.clone());
+            }
         }
     }
     // Dimension associativity: extension dictionary + DIMASSOC per dimension.

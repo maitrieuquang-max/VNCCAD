@@ -87,6 +87,8 @@ pub struct Services {
     /// VNCCad web: ask the browser for a file. The host delivers the chosen file later through
     /// [`CadApp::open_bytes`] (browser file pickers are asynchronous).
     pub request_open: Option<Box<dyn Fn()>>,
+    /// VNCCad: pick a raster image to attach (desktop file dialog).
+    pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
     /// VNCCad web: hand `bytes` to the browser as a download named `name`.
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// VNCCad: where autosaves are kept (a folder on desktop, browser storage on the web).
@@ -193,6 +195,9 @@ impl CadApp {
 
     /// Open a drawing from bytes (web uploads and drag-and-drop).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) {
+        if cadcraft_io::raster::is_image_name(name) || name.to_ascii_lowercase().ends_with('w') {
+            canvas::reload_images(self);
+        }
         let data = cadcraft_engine::cmd::file::base64_encode(bytes);
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
             self.set_status(e);
@@ -203,6 +208,7 @@ impl CadApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
+        canvas::reload_images(self);
         if let Err(e) = self.run("open", json!({ "path": path })) {
             self.set_status(e);
         } else {

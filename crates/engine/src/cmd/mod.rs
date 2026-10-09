@@ -17,6 +17,7 @@ mod modify;
 mod modify2;
 mod props;
 mod qselect;
+pub mod raster;
 mod settings;
 mod table;
 mod utility;
@@ -167,6 +168,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(settings::specs());
         v.extend(utility::specs());
         v.extend(vn::specs());
+        v.extend(raster::specs());
         v.extend(table::specs());
         v.extend(constraints::specs());
         v

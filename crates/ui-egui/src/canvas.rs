@@ -77,6 +77,8 @@ pub fn apply_hot_grip(app: &mut CadApp, to: Vec2) {
 
 #[derive(Default)]
 pub struct CanvasState {
+    /// VNCCad: textures of raster images by file key (`None` = file missing or unreadable).
+    pub images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     pub list: Option<DisplayList>,
     key: (u64, u64, i32, bool, usize),
     /// Set when the app runs on wgpu: entities are drawn by [`crate::gpu`]; otherwise on the CPU.
@@ -260,6 +262,56 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
         }
     }
     p.extend(shapes);
+}
+
+/// VNCCad: raster images of the displayed space, under the vector drawing. Each file is decoded
+/// once into a texture; images on layers that are off or frozen are skipped.
+fn draw_images(app: &mut CadApp, p: &egui::Painter, xf: &Xf) {
+    let Ok(st) = app.session.state() else { return };
+    let d = st.doc.clone();
+    let Some(store) = d.space(&st.space) else { return };
+    let ctx = p.ctx().clone();
+    for e in store.iter() {
+        let cadcraft_doc::EntityKind::Image(im) = &e.kind else { continue };
+        if let Some(l) = d.layer(&e.common.layer)
+            && (!l.on || l.frozen)
+        {
+            continue;
+        }
+        let o = im.insert.xy();
+        let u = im.u.xy() * im.size.x;
+        let v = im.v.xy() * im.size.y;
+        let corners = [o, o + u, o + u + v, o + v].map(|q| xf.to_screen(q));
+        let bb = Rect::from_points(&corners);
+        if !bb.intersects(xf.rect) || bb.width() < 1.0 || bb.height() < 1.0 {
+            continue;
+        }
+        let key = cadcraft_io::raster::file_key(&im.path);
+        let tex = app
+            .canvas
+            .images
+            .entry(key.clone())
+            .or_insert_with(|| {
+                cadcraft_io::raster::decoded(&im.path).map(|dec| {
+                    let img = egui::ColorImage::from_rgba_unmultiplied([dec.width as usize, dec.height as usize], &dec.rgba);
+                    ctx.load_texture(format!("vnccad-image-{key}"), img, egui::TextureOptions::LINEAR)
+                })
+            })
+            .clone();
+        let Some(tex) = tex else { continue };
+        let mut mesh = egui::Mesh::with_texture(tex.id());
+        let uv = [pos2(0.0, 1.0), pos2(1.0, 1.0), pos2(1.0, 0.0), pos2(0.0, 0.0)];
+        for (c, t) in corners.iter().zip(uv) {
+            mesh.vertices.push(egui::epaint::Vertex { pos: *c, uv: t, color: Color32::WHITE });
+        }
+        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+        p.add(Shape::mesh(mesh));
+    }
+}
+
+/// Forget image textures (after a new image file was given to the app, or on REGEN).
+pub fn reload_images(app: &mut CadApp) {
+    app.canvas.images.clear();
 }
 
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
@@ -630,6 +682,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
         }
     };
+    draw_images(app, &painter, &xf_paper);
     let sel = app.session.selection();
     if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);

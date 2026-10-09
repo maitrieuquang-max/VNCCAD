@@ -67,6 +67,24 @@ fn file_name(path: &str) -> String {
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
+    // VNCCad: an image is attached to the open drawing; a world file is kept for later images.
+    let lower = name.to_ascii_lowercase();
+    if [".jgw", ".pgw", ".tfw", ".bpw", ".wld", ".jpgw", ".pngw", ".tifw"].iter().any(|e| lower.ends_with(e)) {
+        cadcraft_io::raster::register(&file_name(name), bytes.to_vec());
+        s.echo(format!("Đã nạp world file {}. Ảnh cùng tên chèn sau sẽ đặt đúng tọa độ.", file_name(name)));
+        return Ok(s.active);
+    }
+    if cadcraft_io::raster::is_image_name(&lower) {
+        let fname = file_name(name);
+        cadcraft_io::raster::register(&fname, bytes.to_vec());
+        if s.docs.is_empty() {
+            s.new_drawing(true);
+        }
+        // Keep the full path on desktop so the drawing finds the file again.
+        let reference = path.clone().unwrap_or(fname);
+        super::raster::run_imageattach(s, &json!({ "path": reference }))?;
+        return Ok(s.active);
+    }
     // VNCCad: a dropped or opened .shx is a font to load, not a drawing.
     if name.to_ascii_lowercase().ends_with(".shx") {
         let fname = file_name(name);
@@ -100,6 +118,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             // Fonts sent alongside the drawing (same folder or its fonts/ subfolder).
             if let Some(dir) = std::path::Path::new(path).parent() {
                 cadcraft_fonts::shx::add_font_dir(dir);
+                cadcraft_io::raster::add_dir(dir);
             }
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
