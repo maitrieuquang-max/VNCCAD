@@ -89,6 +89,12 @@ struct OsnapRef {
     other: Option<Handle>,
 }
 
+/// Names of layers, blocks and styles that come from a resolved external reference
+/// ("XREFNAME|LAYER"): rebuilt from the referenced file on load, never saved.
+fn is_xref_dependent(name: &str) -> bool {
+    name.contains('|')
+}
+
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
@@ -1008,7 +1014,10 @@ pub fn write(d: &Drawing) -> String {
         .map(|(i, l)| (if i == 0 { "*Paper_Space".to_string() } else { format!("*Paper_Space{}", i - 1) }, String::new(), *l))
         .collect();
     let ps_brs: Vec<(String, String, &Layout)> = ps_brs.into_iter().map(|(n, _, l)| (n, w.h(), l)).collect();
-    let mut user_blocks: Vec<(String, String, &Block)> = d.blocks.values().map(|b| (b.name.clone(), String::new(), b.as_ref())).collect();
+    // VNCCad: blocks of resolved external references ("XREF|NAME") are not saved; the xref
+    // block itself is saved as a reference (flag 4 and its path) with no entities.
+    let mut user_blocks: Vec<(String, String, &Block)> =
+        d.blocks.values().filter(|b| !is_xref_dependent(&b.name)).map(|b| (b.name.clone(), String::new(), b.as_ref())).collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
     let mut cx = Ctx::default();
@@ -1222,8 +1231,9 @@ pub fn write(d: &Drawing) -> String {
     }
     w.s(0, "ENDTAB");
     // LAYER
-    let th = table_head(&mut w, "LAYER", d.layers.len());
-    for l in &d.layers {
+    let host_layers: Vec<&Layer> = d.layers.iter().filter(|l| !is_xref_dependent(&l.name)).collect();
+    let th = table_head(&mut w, "LAYER", host_layers.len());
+    for l in host_layers {
         record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
         w.s(2, &l.name);
         w.i(70, i64::from(l.frozen) | if l.vp_freeze_new { 2 } else { 0 } | if l.locked { 4 } else { 0 });
@@ -1243,8 +1253,9 @@ pub fn write(d: &Drawing) -> String {
     }
     w.s(0, "ENDTAB");
     // STYLE
-    let th = table_head(&mut w, "STYLE", d.text_styles.len());
-    for s in &d.text_styles {
+    let host_styles: Vec<&TextStyle> = d.text_styles.iter().filter(|s| !is_xref_dependent(&s.name)).collect();
+    let th = table_head(&mut w, "STYLE", host_styles.len());
+    for s in host_styles {
         let h = record_head(&mut w, "STYLE", &th, "AcDbTextStyleTableRecord");
         cx.styles.entry(s.name.to_ascii_uppercase()).or_insert(h);
         w.s(2, &s.name);
@@ -1282,12 +1293,12 @@ pub fn write(d: &Drawing) -> String {
         w.s(5, h.clone());
         w.s(330, "0");
         w.s(100, "AcDbSymbolTable");
-        w.i(70, d.dim_styles.len() as i64);
+        w.i(70, d.dim_styles.iter().filter(|s| !is_xref_dependent(&s.name)).count() as i64);
         w.s(100, "AcDbDimStyleTable");
         w.i(71, 0);
         h
     };
-    for s in &d.dim_styles {
+    for s in d.dim_styles.iter().filter(|s| !is_xref_dependent(&s.name)) {
         record_head(&mut w, "DIMSTYLE", &th, "AcDbDimStyleTableRecord");
         w.s(2, &s.name);
         w.i(70, 0);
@@ -1332,7 +1343,7 @@ pub fn write(d: &Drawing) -> String {
     // ---------------- BLOCKS ----------------
     w.s(0, "SECTION");
     w.s(2, "BLOCKS");
-    let block = |w: &mut W, name: &str, brh: &str, base: Vec3, flags: i64, ents: &mut dyn Iterator<Item = &Entity>, paper: bool| {
+    let block = |w: &mut W, name: &str, brh: &str, base: Vec3, flags: i64, ents: &mut dyn Iterator<Item = &Entity>, paper: bool, xref_path: &str| {
         let bh = w.h();
         w.s(0, "BLOCK");
         w.s(5, bh);
@@ -1347,7 +1358,7 @@ pub fn write(d: &Drawing) -> String {
         w.i(70, flags);
         w.p(10, base);
         w.s(3, name);
-        w.s(1, "");
+        w.s(1, xref_path);
         for e in ents {
             entity(w, d, e, brh, false, &cx);
         }
@@ -1362,16 +1373,19 @@ pub fn write(d: &Drawing) -> String {
         w.s(8, "0");
         w.s(100, "AcDbBlockEnd");
     };
-    block(&mut w, "*Model_Space", &ms_br, Vec3::ZERO, 0, &mut std::iter::empty(), false);
+    block(&mut w, "*Model_Space", &ms_br, Vec3::ZERO, 0, &mut std::iter::empty(), false, "");
     for (i, (n, h, l)) in ps_brs.iter().enumerate() {
         if i == 0 {
-            block(&mut w, n, h, Vec3::ZERO, 0, &mut std::iter::empty(), true);
+            block(&mut w, n, h, Vec3::ZERO, 0, &mut std::iter::empty(), true, "");
         } else {
-            block(&mut w, n, h, Vec3::ZERO, 0, &mut l.entities.iter().map(|e| e.as_ref()), true);
+            block(&mut w, n, h, Vec3::ZERO, 0, &mut l.entities.iter().map(|e| e.as_ref()), true, "");
         }
     }
     for (n, h, b) in &user_blocks {
-        block(&mut w, n, h, b.base, if b.anonymous { 1 } else { 0 }, &mut b.entities.iter().map(|e| e.as_ref()), false);
+        match &b.xref_path {
+            Some(path) => block(&mut w, n, h, b.base, 4, &mut std::iter::empty(), false, path),
+            None => block(&mut w, n, h, b.base, if b.anonymous { 1 } else { 0 }, &mut b.entities.iter().map(|e| e.as_ref()), false, ""),
+        }
     }
     // Generated geometry entities (dimension, arrowhead and table blocks) need handles.
     for (_, _, ents) in dim_defs.iter_mut().chain(arrow_defs.iter_mut()).chain(table_defs.iter_mut()) {
@@ -1381,13 +1395,13 @@ pub fn write(d: &Drawing) -> String {
         }
     }
     for (n, h, ents) in &dim_defs {
-        block(&mut w, n, h, Vec3::ZERO, 1, &mut ents.iter(), false);
+        block(&mut w, n, h, Vec3::ZERO, 1, &mut ents.iter(), false, "");
     }
     for (n, h, ents) in &arrow_defs {
-        block(&mut w, n, h, Vec3::ZERO, 0, &mut ents.iter(), false);
+        block(&mut w, n, h, Vec3::ZERO, 0, &mut ents.iter(), false, "");
     }
     for (n, h, ents) in &table_defs {
-        block(&mut w, n, h, Vec3::ZERO, 1, &mut ents.iter(), false);
+        block(&mut w, n, h, Vec3::ZERO, 1, &mut ents.iter(), false, "");
     }
     w.s(0, "ENDSEC");
 

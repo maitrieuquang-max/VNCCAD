@@ -101,7 +101,18 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
     let mut d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
     // VNCCad: text in legacy Vietnamese fonts (TCVN3 .VnTime…, VNI-Times…) becomes Unicode.
     let vn = cadcraft_doc::vnlegacy::convert_drawing(&mut d);
+    // VNCCad: external references are read from their files every time.
+    let base = path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(std::path::Path::to_path_buf);
+    let open: Vec<(String, std::sync::Arc<Drawing>)> = s.docs.iter().map(|st| (st.title.clone(), st.doc.clone())).collect();
+    let (xok, xmissing) = super::xref::resolve_all(&mut d, base.as_deref(), &open);
     let i = s.open_drawing(d, &file_name(name), path);
+    if !xok.is_empty() || !xmissing.is_empty() {
+        let mut m = format!("Tham chiếu ngoài: đã nạp {}", xok.len());
+        if !xmissing.is_empty() {
+            m.push_str(&format!("; chưa tìm thấy {} (đặt file cạnh bản vẽ hoặc mở trong tab khác rồi XREF nạp lại)", xmissing.join(", ")));
+        }
+        s.echo(m);
+    }
     if vn.texts > 0 || !vn.styles.is_empty() {
         s.echo(super::vn::report_text(&vn));
     }

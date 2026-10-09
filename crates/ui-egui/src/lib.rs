@@ -36,6 +36,8 @@ pub use control::{ControlRequest, ControlResponse};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    /// VNCCad: the "attach an open drawing as a reference" chooser is showing.
+    pub xattach_pick: bool,
     pub show_toolsets: bool,
     pub show_palettes: bool,
     pub show_toolbar: bool,
@@ -59,6 +61,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
+            xattach_pick: false,
             show_toolsets: true,
             show_palettes: true,
             show_toolbar: true,
@@ -293,6 +296,7 @@ impl CadApp {
         });
         dialogs::show(self, ui.ctx());
         autosave::recovery_dialog(self, ui.ctx());
+        xattach_dialog(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 
@@ -363,6 +367,44 @@ impl CadApp {
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (screen locked or window hidden); use ui.render"}));
             false
         });
+    }
+}
+
+/// VNCCad: choose an open drawing to attach as an external reference (web, where there are no
+/// file paths: the referenced drawing is opened in another tab first).
+fn xattach_dialog(app: &mut CadApp, ctx: &egui::Context) {
+    if !app.ui.xattach_pick {
+        return;
+    }
+    let others: Vec<String> = app.session.docs.iter().enumerate().filter(|(i, _)| *i != app.session.active).map(|(_, st)| st.title.clone()).collect();
+    let mut chosen: Option<String> = None;
+    let mut close = false;
+    egui::Window::new("Gắn tham chiếu ngoài (XATTACH)")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            if others.is_empty() {
+                ui.label("Hãy mở bản vẽ cần tham chiếu (DXF) trong một tab khác trước,");
+                ui.label("rồi quay lại tab này và chạy XATTACH.");
+            } else {
+                ui.label("Chọn bản vẽ đang mở để gắn làm tham chiếu tại gốc tọa độ:");
+                for t in &others {
+                    if ui.button(t).clicked() {
+                        chosen = Some(t.clone());
+                    }
+                }
+            }
+            ui.add_space(6.0);
+            if ui.button("Đóng").clicked() {
+                close = true;
+            }
+        });
+    if let Some(t) = chosen {
+        app.ui.xattach_pick = false;
+        let _ = app.run("xattach", json!({ "name": t }));
+    } else if close {
+        app.ui.xattach_pick = false;
     }
 }
 

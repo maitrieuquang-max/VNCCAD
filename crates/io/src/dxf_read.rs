@@ -810,7 +810,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx::default();
-    let mut blocks: Vec<(String, Vec3, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
+    let mut blocks: Vec<(String, Vec3, Vec<(Option<String>, bool, Entity)>, Option<String>)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
@@ -826,7 +826,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         let t = T(tg);
                         let name = t.s(2).unwrap_or_default();
                         let base = t.p(10);
-                        let xref = t.i(70).unwrap_or(0) & 4 != 0;
+                        // External reference: flag 4, path in code 1.
+                        let xref = (t.i(70).unwrap_or(0) & 4 != 0).then(|| t.s(1).unwrap_or_default());
                         let mut j = i + 1;
                         while recs.get(j).is_some_and(|(k, _)| k != "ENDBLK") {
                             j += 1;
@@ -902,8 +903,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         }
         let mut b = Block::new(&name);
         b.base = base;
-        if xref {
-            b.xref_path = Some(String::new());
+        if let Some(path) = xref {
+            b.xref_path = Some(path);
         }
         for (_, _, e) in ents {
             b.entities.push(e);

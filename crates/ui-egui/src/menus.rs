@@ -101,6 +101,16 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        "xattach" | "xa" if params.is_null() => {
+            if app.services.request_open.is_some() {
+                app.ui.xattach_pick = true;
+                return Some(Ok(Value::Null));
+            }
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                return Some(app.run("xattach", json!({ "path": p })));
+            }
+            Ok(Value::Null)
+        }
         "imageattach" | "iat" if params.is_null() => {
             if let Some(req) = app.services.request_open.as_ref() {
                 // Web: the browser's picker accepts images; the file is attached when it arrives.
