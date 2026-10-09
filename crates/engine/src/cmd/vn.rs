@@ -6,10 +6,11 @@
 //! legacy font has an unusual name.
 
 use cadcraft_doc::vnlegacy::{self, Legacy, VnReport};
+use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -26,6 +27,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Plot Style Table..."])
             .alias(&["ctb", "bangnet"])
             .params("{name: \"monochrome\" | \"grayscale\" | \"<file>.ctb\" | \"none\"} → used by PLOT/EXPORTPDF of the current layout (or of model space)"),
+        CommandSpec::new("plotwindow", "Plot Window to PDF", run_plotwindow)
+            .menu(&["File", "Plot Window to PDF..."])
+            .alias(&["vungin", "inkhung", "pw"])
+            .params("{p1: [x,y], p2: [x,y], paper?: \"A3\" (A4…A0), landscape?} | {extents: true} → sets the model page setup's plot window; interactively also opens the PDF save dialog")
+            .interactive(|_| Ok(Box::new(PlotWindowM::default()))),
         CommandSpec::new("shxfonts", "SHX Fonts", run_shxfonts)
             .menu(&["Tools", "Vietnamese", "SHX Fonts"])
             .params("{} → the SHX fonts loaded and the folders searched")
@@ -57,7 +63,14 @@ fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
     if !none {
         cadcraft_io::ctb::find(&name).map_err(|e| bad("plotstyle", e))?;
     }
-    let value = if none { String::new() } else { name.clone() };
+    // Saved as a file name (AutoCAD expects "monochrome.ctb", not "monochrome").
+    let value = if none {
+        String::new()
+    } else if name.to_ascii_lowercase().ends_with(".ctb") {
+        name.clone()
+    } else {
+        format!("{name}.ctb")
+    };
     match s.layout_space() {
         cadcraft_doc::Space::Paper(layout) => {
             let d = s.doc_mut()?;
@@ -66,17 +79,138 @@ fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         cadcraft_doc::Space::Model => {
+            // The model page setup (saved in the drawing's "Model" layout like AutoCAD).
+            let mut page = cadcraft_io::pdf::model_page(s.doc()?);
+            page.plot_style_table = value.clone();
             let d = s.doc_mut()?;
-            if none {
-                d.header.set("VNCCAD_PLOTSTYLE", cadcraft_doc::HVal::Str("None".into()));
-            } else {
-                d.header.set("VNCCAD_PLOTSTYLE", cadcraft_doc::HVal::Str(value.clone()));
-            }
+            d.model_page = Some(page);
+            d.header.set("VNCCAD_PLOTSTYLE", cadcraft_doc::HVal::Str(String::new()));
         }
     }
     let msg = if none { "Đã bỏ bảng nét in.".to_string() } else { format!("Bảng nét in: {name} (áp dụng khi PLOT/EXPORTPDF).") };
     s.echo(msg.clone());
     Ok(json!({ "name": value, "message": msg }))
+}
+
+/// Set the model page setup to plot `w` on `paper` (orientation from the window's shape unless
+/// given).
+fn set_plot_window(s: &mut Session, w: [f64; 4], paper: Option<&str>, landscape: Option<bool>) -> Result<String> {
+    let mut page = cadcraft_io::pdf::model_page(s.doc()?);
+    if let Some(name) = paper {
+        let ps =
+            cadcraft_render::paper_size(name).ok_or_else(|| bad("plotwindow", format!("khổ giấy không hợp lệ `{name}` (A4, A3, A2, A1, A0)")))?;
+        page.paper = ps.name.into();
+        page.width_mm = ps.width_mm;
+        page.height_mm = ps.height_mm;
+    }
+    page.landscape = landscape.unwrap_or(w[2] - w[0] > w[3] - w[1]);
+    page.plot_area = "window".into();
+    page.window = Some(w);
+    page.scale_to_fit = true;
+    let msg = format!(
+        "Vùng in {:.0} × {:.0}, khổ {} {}, vừa khổ giấy.",
+        w[2] - w[0],
+        w[3] - w[1],
+        page.paper.trim_start_matches("ISO ").split_whitespace().next().unwrap_or(&page.paper),
+        if page.landscape { "ngang" } else { "dọc" }
+    );
+    s.doc_mut()?.model_page = Some(page);
+    s.touch();
+    Ok(msg)
+}
+
+fn run_plotwindow(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("extents").and_then(Value::as_bool) == Some(true) {
+        let mut page = cadcraft_io::pdf::model_page(s.doc()?);
+        page.plot_area = "extents".into();
+        page.window = None;
+        s.doc_mut()?.model_page = Some(page);
+        s.touch();
+        let msg = "In toàn bộ bản vẽ (Extents).".to_string();
+        s.echo(msg.clone());
+        return Ok(json!({ "message": msg }));
+    }
+    let a = point_req("plotwindow", p, "p1")?;
+    let b = point_req("plotwindow", p, "p2")?;
+    let w = super::layout::window_param(&json!([[a.x, a.y], [b.x, b.y]])).ok_or_else(|| bad("plotwindow", "vùng in phải có kích thước"))?;
+    let msg = set_plot_window(s, w, str_param(p, "paper"), p.get("landscape").and_then(Value::as_bool))?;
+    s.echo(msg.clone());
+    Ok(json!({ "window": w, "message": msg }))
+}
+
+/// PLOTWINDOW: pick the corners of a sheet (title block frame), choose the paper, then save it
+/// as PDF — the usual way to plot one of many sheets drawn in model space.
+#[derive(Default)]
+struct PlotWindowM {
+    first: Option<Vec2>,
+    window: Option<[f64; 4]>,
+}
+
+const PAPERS: [&str; 5] = ["A4", "A3", "A2", "A1", "A0"];
+
+impl Interactive for PlotWindowM {
+    fn name(&self) -> &'static str {
+        "PLOTWINDOW"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        match (self.first, self.window) {
+            (None, _) => Prompt::new("Chọn góc thứ nhất của vùng in (khung tên)", Accept::POINT).kw(&["Extents"]),
+            (Some(a), None) => Prompt::new("Chọn góc đối diện", Accept::POINT).base(a),
+            (_, Some(_)) => {
+                let cur = s.doc().map(cadcraft_io::pdf::model_page).map(|p| p.paper).unwrap_or_default();
+                let def = PAPERS.iter().find(|n| cur.starts_with(&format!("ISO {n}")) || cur == **n).copied().unwrap_or("A3");
+                Prompt::new("Khổ giấy", Accept::TEXT).kw(&PAPERS).default(def)
+            }
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.window.is_some() {
+            let paper = match i {
+                Input::Keyword(k) => k,
+                Input::Text(t) => t.trim().to_ascii_uppercase(),
+                Input::Enter => {
+                    let p = self.prompt(s);
+                    p.default.clone().unwrap_or_else(|| "A3".into())
+                }
+                _ => return Ok(Step::Continue),
+            };
+            let paper = if paper.is_empty() { "A3".to_string() } else { paper };
+            let Some(w) = self.window else { return Ok(Step::Done) };
+            let msg = set_plot_window(s, w, Some(&paper), None)?;
+            s.echo(msg);
+            // The host asks where to save the PDF (desktop) or downloads it (web).
+            s.ui_requests.push(("plot".into(), Value::Null));
+            return Ok(Step::Done);
+        }
+        match i {
+            Input::Keyword(k) if k == "Extents" => {
+                run_plotwindow(s, &json!({ "extents": true }))?;
+                s.ui_requests.push(("plot".into(), Value::Null));
+                Ok(Step::Done)
+            }
+            Input::Point(p) => match self.first {
+                None => {
+                    self.first = Some(p);
+                    Ok(Step::Continue)
+                }
+                Some(a) => {
+                    match super::layout::window_param(&json!([[a.x, a.y], [p.x, p.y]])) {
+                        Some(w) => self.window = Some(w),
+                        None => s.echo("Vùng in phải có kích thước; chọn lại góc đối diện."),
+                    }
+                    Ok(Step::Continue)
+                }
+            },
+            Input::Enter => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
+    fn preview(&self, _s: &Session, c: Vec2) -> Vec<cadcraft_doc::EntityKind> {
+        match (self.first, self.window) {
+            (Some(a), None) => vec![super::helpers::lwpoly(super::helpers::rect_vertices(a, c), true)],
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn run_shxfonts(_s: &mut Session, _p: &Value) -> Result<Value> {
@@ -174,5 +308,29 @@ mod tests {
         assert!(s.execute("plotstyle", &json!({"name": "khong-co.ctb"})).is_err());
         s.execute("plotstyle", &json!({"name": "none"})).unwrap();
         assert!(pdf_text(&mut s).contains("1 0 0 RG"));
+    }
+
+    #[test]
+    fn plot_window_sets_the_model_page() {
+        let mut s = Session::new();
+        let r = s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [840, 594], "paper": "A1"})).unwrap();
+        assert!(r["message"].as_str().unwrap().contains("ngang"));
+        let page = s.doc().unwrap().model_page.clone().unwrap();
+        assert_eq!(page.plot_area, "window");
+        assert_eq!(page.window, Some([0.0, 0.0, 840.0, 594.0]));
+        assert!(page.landscape && page.paper.contains("A1"));
+        assert!(s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [0, 5]})).is_err());
+        assert!(s.execute("plotwindow", &json!({"p1": [0, 0], "p2": [5, 5], "paper": "B9"})).is_err());
+        s.execute("plotwindow", &json!({"extents": true})).unwrap();
+        assert_eq!(s.doc().unwrap().model_page.clone().unwrap().plot_area, "extents");
+        // Interactive: two corners, the paper, then the host is asked to save the PDF.
+        s.start("plotwindow").unwrap();
+        s.cmdline("10,10").unwrap();
+        s.cmdline("110,300").unwrap();
+        s.cmdline("A3").unwrap();
+        let page = s.doc().unwrap().model_page.clone().unwrap();
+        assert_eq!(page.window, Some([10.0, 10.0, 110.0, 300.0]));
+        assert!(!page.landscape && page.paper.contains("A3"));
+        assert_eq!(s.ui_requests.first().map(|r| r.0.as_str()), Some("plot"));
     }
 }

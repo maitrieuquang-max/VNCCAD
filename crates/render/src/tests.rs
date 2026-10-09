@@ -99,6 +99,33 @@ fn hatch_pattern_and_solid() {
 }
 
 #[test]
+fn hatch_too_dense_for_the_view_becomes_a_fill() {
+    let mut d = Drawing::new_imperial();
+    let sq: Vec<PolyVertex> = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)].iter().map(|(x, y)| PolyVertex::new(Vec2::new(*x, *y))).collect();
+    let h = Hatch {
+        pattern: "ANSI31".into(),
+        solid: false,
+        loops: vec![HatchLoop { vertices: sq, outer: true }],
+        scale: 1.0,
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+    // Zoomed out so far that the 0.125 spacing is under half a pixel: one fill, no lines.
+    let far = build(&d, &Space::Model, &Options { tolerance: 0.5, ..Options::default() });
+    assert_eq!(far.prims.len(), 1);
+    assert_eq!(far.prims[0].kind, Kind::Tris);
+    // Plots keep every line.
+    let near = build(&d, &Space::Model, &Options { tolerance: 0.001, ..Options::default() });
+    assert!(near.prims.len() > 35);
+}
+
+#[test]
 fn raster_draws_pixels() {
     let d = sample();
     let l = build(&d, &Space::Model, &Options::default());

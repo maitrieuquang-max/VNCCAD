@@ -41,6 +41,9 @@ pub struct PdfOptions {
     /// VNCCad: plot style table (".ctb" name, or the built-in "monochrome" / "grayscale").
     /// Default: the layout's page setup.
     pub plot_style: Option<String>,
+    /// VNCCad: plot only this window (drawing units), fitted to the paper unless a scale is
+    /// given. Default: the page setup's window when its plot area is "window".
+    pub window: Option<Bounds2>,
 }
 
 impl PdfOptions {
@@ -61,8 +64,26 @@ impl PdfOptions {
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
             plot_style: v.get("plotStyleTable").and_then(Value::as_str).map(str::to_string).filter(|s| !s.trim().is_empty()),
+            window: window_json(v.get("window")),
         }
     }
+}
+
+/// `[[x1, y1], [x2, y2]]` or `[x1, y1, x2, y2]` → a non-empty window.
+fn window_json(v: Option<&Value>) -> Option<Bounds2> {
+    let a = v?.as_array()?;
+    let n: Vec<f64> = match a.len() {
+        2 => a.iter().filter_map(Value::as_array).flat_map(|p| p.iter().take(2).filter_map(Value::as_f64)).collect(),
+        4 => a.iter().filter_map(Value::as_f64).collect(),
+        _ => return None,
+    };
+    window_of(&n)
+}
+
+fn window_of(n: &[f64]) -> Option<Bounds2> {
+    let [x1, y1, x2, y2] = *n else { return None };
+    let b = Bounds2::new(Vec2::new(x1.min(x2), y1.min(y2)), Vec2::new(x1.max(x2), y1.max(y2)));
+    (n.iter().all(|v| v.is_finite()) && b.width() > 1e-9 && b.height() > 1e-9).then_some(b)
 }
 
 /// Plot with JSON options (the engine's `plot` hook).
@@ -70,21 +91,39 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     pdf(d, space, &PdfOptions::from_json(opts))
 }
 
+/// The model-space page setup: the saved one, else A4 (metric) or Letter, plotting the extents.
+pub fn model_page(d: &Drawing) -> PageSetup {
+    if let Some(p) = &d.model_page {
+        return p.clone();
+    }
+    let mut p = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
+    if paper::paper_unit_mm(d) == 1.0
+        && let Some(a4) = paper::paper_size("A4")
+    {
+        p.paper = a4.name.into();
+        p.width_mm = a4.width_mm;
+        p.height_mm = a4.height_mm;
+    }
+    p
+}
+
+/// The plot style table saved for `space` (its page setup), if any.
+pub fn saved_plot_style(d: &Drawing, space: &Space) -> Option<String> {
+    let name = match space {
+        Space::Model => {
+            let p = model_page(d).plot_style_table;
+            if p.is_empty() { d.header.str("VNCCAD_PLOTSTYLE", "") } else { p }
+        }
+        Space::Paper(n) => d.layout(n).map(|l| l.page.plot_style_table.clone()).unwrap_or_default(),
+    };
+    Some(name).filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none"))
+}
+
 /// The page setup a plot of `space` uses, with overrides applied.
 pub fn page_for(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<PageSetup> {
     let mut page = match space {
         Space::Paper(n) => d.layout(n).map(|l| l.page.clone()).ok_or_else(|| IoError::Format(format!("no layout `{n}`")))?,
-        Space::Model => {
-            let mut p = PageSetup::default();
-            if paper::paper_unit_mm(d) == 1.0
-                && let Some(a4) = paper::paper_size("A4")
-            {
-                p.paper = a4.name.into();
-                p.width_mm = a4.width_mm;
-                p.height_mm = a4.height_mm;
-            }
-            p
-        }
+        Space::Model => model_page(d),
     };
     if let Some(name) = &o.paper {
         let ps = paper::paper_size(name).ok_or_else(|| IoError::Format(format!("unknown paper size `{name}`")))?;
@@ -123,33 +162,35 @@ impl Map {
 
 /// Write a one-page vector PDF of a space.
 pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
-    let page = page_for(d, space, o)?;
+    let mut page = page_for(d, space, o)?;
+    let window = o.window.or_else(|| page.window.filter(|_| page.plot_area == "window").and_then(|w| window_of(&w)));
+    // A window given with the plot turns the paper to match its shape.
+    if let (Some(w), Some(_), None) = (window, o.window, o.landscape) {
+        page.landscape = w.width() > w.height();
+    }
     let unit_mm = paper::paper_unit_mm(d);
     let sheet = Sheet::from_page(&page, unit_mm);
     let lineweights = o.lineweights.unwrap_or(match space {
         Space::Paper(_) => page.lineweights,
         Space::Model => true,
     });
-    let saved = match space {
-        Space::Paper(_) => page.plot_style_table.clone(),
-        Space::Model => d.header.str("VNCCAD_PLOTSTYLE", ""),
-    };
-    let style = o.plot_style.clone().or_else(|| Some(saved).filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("none")));
-    let pens = match style {
-        Some(name) => Some(std::sync::Arc::new(crate::ctb::find(&name).map_err(IoError::Format)?)),
-        None => None,
+    // A table asked for with the plot must exist; one saved in the drawing that isn't on this
+    // computer plots with object colours instead, like AutoCAD (the engine warns).
+    let pens = match &o.plot_style {
+        Some(name) => Some(std::sync::Arc::new(crate::ctb::find(name).map_err(IoError::Format)?)),
+        None => saved_plot_style(d, space).and_then(|n| crate::ctb::find(&n).ok()).map(std::sync::Arc::new),
     };
     let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights, pens, anno_scale: 0.0 };
     let k = unit_mm * PT_PER_MM;
-    let fit = o.fit.unwrap_or(matches!(space, Space::Model));
+    let fit = o.fit.unwrap_or(matches!(space, Space::Model) || window.is_some());
     // Chord tolerance: about 0.05 mm on paper.
-    let est = plot_scale(&d.extents(space), &sheet, fit, o.scale);
+    let est = plot_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, fit, o.scale);
     let tol = 0.05 / unit_mm / est.max(1e-300);
     let tolerance = if tol.is_finite() && tol > 0.0 { tol } else { ropts.tolerance };
     let list = cadcraft_render::build_plot(d, space, &cadcraft_render::Options { tolerance, ..ropts });
-    let b = list.bounds;
+    let b = window.unwrap_or(list.bounds);
     let s = plot_scale(&b, &sheet, fit, o.scale);
-    let map = if fit || matches!(space, Space::Model) {
+    let map = if fit || matches!(space, Space::Model) || window.is_some() {
         let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
         Map { from, s, to: sheet.printable.center(), k }
     } else {
@@ -160,6 +201,14 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
         Bounds2::new(sheet.printable.min * k, sheet.printable.max * k)
     } else {
         Bounds2::new(Vec2::ZERO, media)
+    };
+    // Nothing outside the window.
+    let clip_pt = match window {
+        Some(w) => {
+            let (a, c) = (map.pt(w.min), map.pt(w.max));
+            Bounds2::new(Vec2::new(a.x.max(clip_pt.min.x), a.y.max(clip_pt.min.y)), Vec2::new(c.x.min(clip_pt.max.x), c.y.min(clip_pt.max.y)))
+        }
+        None => clip_pt,
     };
     let content = content_stream(&list, &map, &clip_pt);
     let title = if o.title.is_empty() {
@@ -251,6 +300,10 @@ fn content_stream(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Boun
         }
         let w = f64::from(p.lw) * PT_PER_MM;
         let w = if w.is_finite() && w > 0.0 { w.min(100.0) } else { 0.0 };
+        // Skip what lies wholly outside the plot area (a window of a large drawing).
+        if !matches!(p.kind, Kind::Infinite { .. }) && !Bounds2::from_points(raw.iter().map(|q| map.pt(*q))).intersects(&clip_pt.expand(w + 1.0)) {
+            continue;
+        }
         match p.kind {
             Kind::Polyline | Kind::Infinite { .. } => {
                 let pts: Vec<Vec2> = match p.kind {

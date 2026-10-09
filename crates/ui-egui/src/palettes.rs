@@ -499,7 +499,15 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             ("Annotation scale", h.str("CANNOSCALE", "1:1"), true),
             ("Text height", format!("{:.4}", h.f64("TEXTSIZE", 0.2)), true),
             ("Plot style", "ByColor".into(), true),
-            ("Plot style table", h.str("VNCCAD_PLOTSTYLE", "None"), true),
+            (
+                "Plot style table",
+                d.model_page
+                    .as_ref()
+                    .map(|p| p.plot_style_table.clone())
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| Some(h.str("VNCCAD_PLOTSTYLE", "")).filter(|t| !t.is_empty()).unwrap_or_else(|| "None".into())),
+                true,
+            ),
             ("Plot style attached to", "Model".into(), false),
             ("Plot table type", "Not available".into(), false),
         ];

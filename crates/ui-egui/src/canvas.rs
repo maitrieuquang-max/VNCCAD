@@ -853,8 +853,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             dynamic_input(app, &painter, hp);
         }
     }
-    // Keep animating during interaction.
-    if inside {
+    // Keep animating during interaction (not while the pointer merely rests on the canvas:
+    // redrawing a large drawing every frame keeps the CPU/GPU busy for nothing).
+    if inside && ui.input(|i| i.pointer.is_moving() || i.pointer.any_down() || i.smooth_scroll_delta != egui::Vec2::ZERO) {
         ui.ctx().request_repaint();
     }
 }

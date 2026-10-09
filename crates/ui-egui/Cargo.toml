@@ -13,6 +13,7 @@ cadcraft-geom = { workspace = true }
 cadcraft-color = { workspace = true }
 cadcraft-doc = { workspace = true }
 cadcraft-render = { workspace = true }
+cadcraft-fonts = { workspace = true }
 cadcraft-engine = { workspace = true }
 # VNCCad: decoded raster images for IMAGE entities.
 cadcraft-io = { workspace = true }

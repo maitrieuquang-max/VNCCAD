@@ -6,7 +6,13 @@ use cadcraft_doc::library::{HatchPattern, pattern};
 use cadcraft_geom::{Bounds2, Polyline, Vec2};
 
 /// Hatch line runs in world coordinates (single-point runs are dots).
-pub fn pattern_lines(h: &Hatch, tol: f64) -> Vec<Vec<Vec2>> {
+/// VNCCad: pattern lines at the detail the view can show. Families whose lines are closer than
+/// `tol` (half a pixel on screen) can't be told apart: they are left out and `true` is
+/// returned so the caller can fill the area instead, the way such a hatch looks anyway. Dash
+/// patterns shorter than `tol` are drawn as continuous lines. Zoomed out on a large drawing,
+/// this turns millions of invisible segments into one fill.
+pub fn pattern_lines_lod(h: &Hatch, tol: f64) -> (Vec<Vec<Vec2>>, bool) {
+    let mut dense = false;
     let pat = pattern(&h.pattern).unwrap_or_else(|| pattern("ANSI31").unwrap_or(HatchPattern { name: "ANSI31", description: "", lines: vec![] }));
     let loops: Vec<Vec<Vec2>> = h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
     let scale = if h.scale.is_finite() && h.scale > 1e-9 { h.scale } else { 1.0 };
@@ -19,13 +25,20 @@ pub fn pattern_lines(h: &Hatch, tol: f64) -> Vec<Vec<Vec2>> {
         if spacing < 1e-9 {
             continue;
         }
-        let dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
+        if tol > 0.0 && spacing < tol {
+            dense = true;
+            continue;
+        }
+        let mut dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
+        if tol > 0.0 && dashes.iter().map(|d| d.abs()).sum::<f64>() < tol {
+            dashes.clear();
+        }
         family(&loops, origin, ang, delta, spacing, &dashes, &mut out);
         if out.len() > 500_000 {
             break;
         }
     }
-    out
+    (out, dense)
 }
 
 fn family(loops: &[Vec<Vec2>], origin: Vec2, ang: f64, delta: Vec2, spacing: f64, dashes: &[f64], out: &mut Vec<Vec<Vec2>>) {

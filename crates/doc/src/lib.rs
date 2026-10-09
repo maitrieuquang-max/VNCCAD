@@ -71,6 +71,9 @@ pub struct Drawing {
     pub parametric: Parametric,
     /// Next free handle.
     pub handseed: u64,
+    /// VNCCad: page setup of model space (paper, plot window, plot style table), saved in the
+    /// "Model" LAYOUT object like AutoCAD does. `None`: defaults (fit extents on A4/Letter).
+    pub model_page: Option<PageSetup>,
 }
 
 impl Default for Drawing {
@@ -117,6 +120,7 @@ impl Drawing {
             constraints: Vec::new(),
             parametric: Parametric::default(),
             handseed: 0x100,
+            model_page: None,
         }
     }
 

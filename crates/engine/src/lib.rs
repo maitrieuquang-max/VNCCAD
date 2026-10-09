@@ -306,6 +306,9 @@ pub struct Session {
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
+    /// VNCCad: UI commands a finished command asks the host to run next (e.g. PLOTWINDOW
+    /// opens the PDF save dialog). The UI drains this every frame; headless hosts ignore it.
+    pub ui_requests: Vec<(String, serde_json::Value)>,
 }
 
 impl Default for Session {
@@ -337,6 +340,7 @@ impl Session {
             pending_window: None,
             untitled_counter: 0,
             last_dim: None,
+            ui_requests: Vec::new(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

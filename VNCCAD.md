@@ -38,6 +38,24 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 | Cầu đường | `VNLAYERS` (bộ layer đường/cầu theo TCVN 8-20:2002), `TRACDOC`, `TRACNGANG`, `BANGKL` | Dán bảng số liệu từ Excel (tab, `;` hoặc `,`; số thập phân dấu phẩy; lý trình `Km1+250.5`) |
 | Tỷ lệ chú thích | `CANNOSCALE 1:100`; kiểu chữ/kích thước bật Annotative | Trong Model vẽ theo CANNOSCALE; trong viewport theo tỷ lệ viewport |
 | Bảng nét in CTB | `PLOTSTYLE monochrome`, `grayscale` hoặc `<file>.ctb`; kéo-thả `.ctb` | Áp màu, độ dày nét, độ đậm nhạt theo số màu khi PLOT/EXPORTPDF; file `.ctb` đặt cạnh bản vẽ hoặc trong `VNCCad/plotstyles` |
+| In theo vùng chọn | `PLOTWINDOW` (`VUNGIN`, `PW`): chọn 2 góc khung tên → khổ giấy A4…A0 → lưu PDF; `PAGESETUP` trong Model | Dùng cho bản vẽ đặt nhiều tờ trong Model. Hướng giấy theo hình dạng vùng in; thiết lập in của Model (khổ, vùng in, bảng nét) lưu trong file như AutoCAD |
+
+### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
+
+Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:
+
+| Lỗi | Sửa |
+|---|---|
+| Chữ Trung Quốc (và Nhật, Hàn) hiện ô vuông khi máy không có font gốc (sysz/syfs.shx, simhei.ttf) | Ký tự font thiếu lấy từ font hệ thống có chữ CJK (SimSun/Microsoft YaHei trên Windows, PingFang trên macOS, Noto CJK trên Linux); đọc được font dạng `.ttc` |
+| Tên layout, layer chữ Trung hiện ô vuông trên giao diện | Thêm font CJK hệ thống làm font dự phòng của giao diện |
+| File DXF lưu ra ghi chữ Unicode thô với mã trang ANSI_1252: AutoCAD đọc ra chữ lỗi (cả tiếng Việt) | Ghi `\U+XXXX` như AutoCAD làm khi lưu bản 2000; DWG vốn đã đúng |
+| Mẫu hatch dày đặc sinh 8 triệu nét khi thu nhỏ, dựng hình 1,6 s | Đường mẫu cách nhau dưới nửa pixel vẽ thành mảng tô: còn 180 nghìn nét, 0,6 s; khi in vẫn giữ đủ nét |
+| Chuột để yên trên vùng vẽ vẫn vẽ lại liên tục (CPU 100%+) | Chỉ vẽ lại khi có thao tác |
+| Không in được một tờ trong Model (chỉ in toàn bộ) | Lệnh `PLOTWINDOW`, thiết lập in Model |
+| Bảng nét in gán trong bản vẽ không có trên máy → lệnh in báo lỗi và dừng | In theo màu đối tượng, báo tên bảng thiếu (như AutoCAD) |
+| Tỷ lệ chú thích, bảng nét in của Model không được lưu vào file | Lưu trong LAYOUT "Model" và XRECORD `VNCCAD_SETTINGS` |
+
+Đã kiểm tra: mở 0,7 s; lưu DWG/DXF rồi mở lại đủ 21.975 đối tượng, 188 block, 127 layer; DXF qua kiểm tra ezdxf 0 lỗi; chọn tất cả – di chuyển – hoàn tác; in tờ 1 ra PDF A1 đơn sắc, khung tên đọc rõ. `cadcraft-cli perf FILE.dwg` đo thời gian trên bản vẽ thật.
 
 ### Giới hạn hiện tại
 
@@ -45,6 +63,8 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 - Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
 - Bảng nét in theo tên (STB) chưa hỗ trợ; Xref lồng nhau (xref bên trong xref) không được nạp; ảnh/PDF nền chưa in ra PDF khi PLOT.
+- Bản web không có font hệ thống: chữ Trung/Nhật/Hàn chỉ hiện khi kéo-thả kèm một font có các chữ đó (ví dụ `simsun.ttc`).
+- Bản vẽ lưu DWG ra định dạng AutoCAD 2000 (mở được bằng mọi bản AutoCAD từ 2000).
 - Kích thước annotative chỉ áp dụng khi kích thước được dựng lại trong VNCCad (kích thước đọc từ file kèm block `*D` vẽ theo block đó).
 
 ## Build

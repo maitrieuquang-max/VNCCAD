@@ -500,6 +500,9 @@ pub struct PageSetup {
     pub plot_style_table: String,
     pub center: bool,
     pub lineweights: bool,
+    /// VNCCad: the plot window `[x1, y1, x2, y2]` in drawing units, used when `plot_area` is
+    /// "window".
+    pub window: Option<[f64; 4]>,
 }
 
 impl Default for PageSetup {
@@ -517,6 +520,7 @@ impl Default for PageSetup {
             plot_style_table: String::new(),
             center: false,
             lineweights: true,
+            window: None,
         }
     }
 }

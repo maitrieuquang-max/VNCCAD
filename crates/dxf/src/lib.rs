@@ -186,12 +186,26 @@ fn unescape_unicode(s: &str) -> String {
     while let Some(&c) = chars.get(i) {
         if c == '\\' && chars.get(i + 1) == Some(&'U') && chars.get(i + 2) == Some(&'+') {
             let hex: String = chars.iter().skip(i + 3).take(4).collect();
-            if hex.len() == 4
-                && let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
-            {
+            let unit = if hex.len() == 4 { u32::from_str_radix(&hex, 16).ok() } else { None };
+            if let Some(ch) = unit.and_then(char::from_u32) {
                 out.push(ch);
                 i += 7;
                 continue;
+            }
+            // A UTF-16 surrogate pair written as two escapes.
+            if let Some(hi) = unit.filter(|u| (0xD800..0xDC00).contains(u))
+                && chars.get(i + 7) == Some(&'\\')
+                && chars.get(i + 8) == Some(&'U')
+                && chars.get(i + 9) == Some(&'+')
+            {
+                let lo_hex: String = chars.iter().skip(i + 10).take(4).collect();
+                if let Some(lo) = u32::from_str_radix(&lo_hex, 16).ok().filter(|u| (0xDC00..0xE000).contains(u))
+                    && let Some(ch) = char::from_u32(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+                {
+                    out.push(ch);
+                    i += 14;
+                    continue;
+                }
             }
         }
         out.push(c);
@@ -327,13 +341,35 @@ pub fn format_real(v: f64) -> String {
     if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") { s } else { format!("{s}.0") }
 }
 
+/// VNCCad: non-ASCII characters as `\U+XXXX` (UTF-16 units). Files are written with the R2000
+/// structure, whose strings AutoCAD reads in the drawing's code page; the escapes keep
+/// Vietnamese, Chinese… text intact in every AutoCAD version (AutoCAD writes them the same way
+/// when saving to the 2000 format).
+pub fn escape_unicode(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() * 2);
+    let mut buf = [0u16; 2];
+    for c in s.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            for u in c.encode_utf16(&mut buf) {
+                let _ = write!(out, "\\U+{u:04X}");
+            }
+        }
+    }
+    out
+}
+
 /// Write tags as ASCII DXF (CRLF line ends, codes right-aligned to 3 as is conventional).
 pub fn write_ascii(tags: &[Tag]) -> String {
     let mut out = String::with_capacity(tags.len() * 16);
     for t in tags {
         let _ = write!(out, "{:>3}\r\n", t.code);
         let v = match &t.value {
-            Value::Str(s) => s.replace(['\r', '\n'], " "),
+            Value::Str(s) => escape_unicode(&s.replace(['\r', '\n'], " ")),
             Value::Real(r) => format_real(*r),
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => i64::from(*b).to_string(),
@@ -451,6 +487,12 @@ mod tests {
     #[test]
     fn unicode_escapes_and_latin1() {
         let t = parse(b"1\nCaf\\U+00E9\n0\nEOF\n").unwrap();
+        // VNCCad: written escaped, read back intact (BMP and beyond).
+        for v in ["Cầu Sông Hàn", "建筑面积 m²", "a😀b", "plain"] {
+            let text = write_ascii(&[Tag::s(1, v)]);
+            assert!(text.is_ascii(), "{text}");
+            assert_eq!(parse(text.as_bytes()).unwrap()[0].str(), v);
+        }
         assert_eq!(t[0].str(), "Café");
         let t = parse(b"1\nCaf\xe9\n0\nEOF\n").unwrap();
         assert_eq!(t[0].str(), "Café");

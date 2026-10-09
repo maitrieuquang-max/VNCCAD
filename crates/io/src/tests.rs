@@ -910,3 +910,47 @@ fn pdf_underlays_round_trip_as_pdfunderlay() {
     assert_eq!(got.insert, im.insert);
     assert!((got.u.x - px).abs() < 1e-12 && got.u.y.abs() < 1e-12);
 }
+
+/// VNCCad: two "sheets" side by side in model space; a window plot shows only one.
+#[test]
+fn pdf_plot_window_keeps_one_sheet() {
+    let mut d = Drawing::new_metric();
+    let red = Common { color: Color::Index(1), ..Common::default() };
+    let blue = Common { color: Color::Index(5), ..Common::default() };
+    let rect = |x: f64| {
+        EntityKind::LwPolyline(LwPolyline {
+            vertices: [(x, 0.0), (x + 420.0, 0.0), (x + 420.0, 297.0), (x, 297.0)].iter().map(|(a, b)| PolyVertex::new(Vec2::new(*a, *b))).collect(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        })
+    };
+    d.add(&Space::Model, red, rect(0.0)).unwrap();
+    d.add(&Space::Model, blue, rect(1000.0)).unwrap();
+    let all = check_pdf(&plot(&d, &Space::Model, &serde_json::json!({"compress": false})).unwrap());
+    assert!(all.contains("1 0 0 RG") && all.contains("0 0 1 RG"));
+    let one = plot(&d, &Space::Model, &serde_json::json!({"compress": false, "paper": "A3", "window": [[-1, -1], [421, 298]]})).unwrap();
+    let c = check_pdf(&one);
+    assert!(c.contains("1 0 0 RG") && !c.contains("0 0 1 RG"), "only the first sheet");
+    // A3 turned to landscape by the window's shape.
+    let (w, h) = media_box(&one);
+    assert!(w > h && (w - 1190.55).abs() < 0.1, "{w} x {h}");
+    // Saved as the model page setup, the window survives DXF (and is used by a plain plot).
+    let mut page = pdf::model_page(&d);
+    page.plot_area = "window".into();
+    page.window = Some([999.0, -1.0, 1421.0, 298.0]);
+    page.plot_style_table = "monochrome.ctb".into();
+    d.model_page = Some(page);
+    d.header.set("CANNOSCALE", HVal::Str("1:100".into()));
+    let back = read(&write(&d, "w.dxf").unwrap(), "w.dxf").unwrap();
+    let p = back.model_page.clone().expect("model page setup read back");
+    assert_eq!(p.plot_area, "window");
+    assert_eq!(p.window, Some([999.0, -1.0, 1421.0, 298.0]));
+    assert_eq!(p.plot_style_table, "monochrome.ctb");
+    assert_eq!(back.header.str("CANNOSCALE", ""), "1:100");
+    let c = check_pdf(&plot(&back, &Space::Model, &serde_json::json!({"compress": false})).unwrap());
+    // Only the second sheet, plotted black by the monochrome table.
+    assert!(!c.contains("0 0 1 RG") && !c.contains("1 0 0 RG") && c.contains("0 0 0 RG"));
+    assert!(c.contains(" l\n"));
+}

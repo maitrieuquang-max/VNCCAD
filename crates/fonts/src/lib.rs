@@ -245,9 +245,8 @@ pub(crate) fn decorations(spans: &[(f64, f64, bool, bool)], h: f64) -> Vec<Vec<V
     out
 }
 
-/// Shape one line in `font` (baseline at y = 0, x from 0). TrueType fonts that fail to parse
-/// fall back to the stroke font.
-pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
+/// Shape one line in a single font (no fallback).
+fn shape_one(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
     if let TextFont::Outline(bytes) = font
         && let Some(sh) = ttf::shape(bytes, s, height, width_factor, oblique)
     {
@@ -260,8 +259,87 @@ pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, obli
     Shaped { strokes: run.strokes, glyphs: Vec::new(), width: run.width }
 }
 
+/// Whether `font` draws `c` itself (SHX fonts also draw what the stroke font has).
+fn covers(font: &TextFont, c: char) -> bool {
+    if c.is_whitespace() || c.is_control() {
+        return true;
+    }
+    match font {
+        TextFont::Stroke => stroke::glyph_strokes(c).is_some(),
+        TextFont::Shx(f) => f.has(c) || stroke::glyph_strokes(c).is_some() || (c == '⌀' && stroke::glyph_strokes('Ø').is_some()),
+        TextFont::Outline(b) => ttf::has(b, c),
+    }
+}
+
+/// Re-encode decoded characters as text with `%%` codes, so a piece shapes exactly as it did
+/// inside the whole line.
+fn encode(chars: &[(char, bool, bool)]) -> String {
+    let mut out = String::new();
+    let (mut u, mut o) = (false, false);
+    for &(c, under, over) in chars {
+        if under != u {
+            out.push_str("%%u");
+            u = under;
+        }
+        if over != o {
+            out.push_str("%%o");
+            o = over;
+        }
+        if c == '%' {
+            out.push_str("%%%");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Split a line into runs of (uses fallback font, characters).
+fn pieces(font: &TextFont, s: &str) -> Option<(Arc<Vec<u8>>, Vec<(bool, Vec<(char, bool, bool)>)>)> {
+    let chars = decode_controls(s);
+    if chars.iter().all(|(c, _, _)| covers(font, *c)) {
+        return None;
+    }
+    let fb = ttf::fallback_cjk()?;
+    let mut out: Vec<(bool, Vec<(char, bool, bool)>)> = Vec::new();
+    for ch in chars {
+        let alt = !covers(font, ch.0) && ttf::has(&fb, ch.0);
+        match out.last_mut() {
+            Some((a, v)) if *a == alt => v.push(ch),
+            _ => out.push((alt, vec![ch])),
+        }
+    }
+    Some((fb, out))
+}
+
+/// Shape one line in `font` (baseline at y = 0, x from 0). Characters the font lacks (Chinese,
+/// Japanese, Korean… when the drawing's big font is missing) are drawn with a system font that
+/// has them. TrueType fonts that fail to parse fall back to the stroke font.
+pub fn shape_line(font: &TextFont, s: &str, height: f64, width_factor: f64, oblique: f64) -> Shaped {
+    let Some((fb, parts)) = pieces(font, s) else { return shape_one(font, s, height, width_factor, oblique) };
+    let mut out = Shaped::default();
+    let mut x = 0.0;
+    for (alt, chars) in parts {
+        let text = encode(&chars);
+        let mut sh = if alt {
+            ttf::shape_fallback(&fb, &text, height, width_factor, oblique).unwrap_or_else(|| shape_one(font, &text, height, width_factor, oblique))
+        } else {
+            shape_one(font, &text, height, width_factor, oblique)
+        };
+        let w = sh.width;
+        sh.map(|p| Vec2::new(p.x + x, p.y));
+        out.extend(sh);
+        x += w;
+    }
+    out.width = x;
+    out
+}
+
 /// Width of one line in `font`.
 pub fn text_width(font: &TextFont, s: &str, height: f64, width_factor: f64) -> f64 {
+    if pieces(font, s).is_some() {
+        return shape_line(font, s, height, width_factor, 0.0).width;
+    }
     if let TextFont::Outline(bytes) = font
         && let Some(w) = ttf::width(bytes, s, height, width_factor)
     {
@@ -472,6 +550,35 @@ mod tests {
         let (_, bb) = place_text("ABC", Vec2::ZERO, Some(Vec2::new(10.0, 0.0)), 1.0, 0.0, 1.0, 0.0, Align::Fit, VAlign::Baseline);
         assert!((bb.width() - 10.0).abs() < 1e-6);
         assert!((bb.max.y - 1.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    #[test]
+    fn encode_round_trips_control_codes() {
+        for s in ["a%%ub%%uc 100%%%", "%%o%%uX%%o%%u", "中文 ABC", "%%c50"] {
+            let d = decode_controls(s);
+            assert_eq!(decode_controls(&encode(&d)), d, "{s}");
+        }
+    }
+
+    #[test]
+    fn missing_ideographs_use_a_system_font_when_installed() {
+        let Some(fb) = ttf::fallback_cjk() else { return };
+        assert!(ttf::has(&fb, '布'));
+        let sh = shape_line(&TextFont::Stroke, "A布局1", 10.0, 1.0, 0.0);
+        // The ideographs are filled outlines, the Latin letters stay strokes.
+        assert_eq!(sh.glyphs.len(), 2);
+        assert!(!sh.strokes.is_empty());
+        let w = text_width(&TextFont::Stroke, "A布局1", 10.0, 1.0);
+        assert!((w - sh.width).abs() < 1e-9 && w > 25.0);
+        // An ideograph is about as tall as the text height.
+        let b = shape_line(&TextFont::Stroke, "中", 10.0, 1.0, 0.0);
+        let top = b.glyphs.iter().flatten().flatten().map(|p| p.y).fold(f64::MIN, f64::max);
+        assert!(top > 8.0 && top < 12.0, "{top}");
     }
 }
 

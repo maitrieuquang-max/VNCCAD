@@ -1186,6 +1186,8 @@ pub fn write(d: &Drawing) -> String {
     let layout_dict = w.h();
     let table_style_dict = w.h();
     let constraints_xrec = w.h();
+    let settings = dxf_ext::settings_lines(d);
+    let settings_xrec = w.h();
     let model_layout = w.h();
     let layout_handles: Vec<String> = ps_brs.iter().map(|_| w.h()).collect();
 
@@ -1492,6 +1494,10 @@ pub fn write(d: &Drawing) -> String {
         w.s(3, dxf_ext::CONSTRAINTS_KEY);
         w.s(350, constraints_xrec.clone());
     }
+    if !settings.is_empty() {
+        w.s(3, dxf_ext::SETTINGS_KEY);
+        w.s(350, settings_xrec.clone());
+    }
     w.s(0, "DICTIONARY");
     w.s(5, group_dict);
     w.s(330, root_dict.clone());
@@ -1520,6 +1526,17 @@ pub fn write(d: &Drawing) -> String {
         w.i(280, 1);
         for c in chunks {
             w.s(1, c.clone());
+        }
+    }
+    if !settings.is_empty() {
+        w.s(0, "XRECORD");
+        w.s(5, settings_xrec.clone());
+        w.group("ACAD_REACTORS", 330, &[&root_dict]);
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbXrecord");
+        w.i(280, 1);
+        for l in &settings {
+            w.s(1, l.clone());
         }
     }
     // PDF underlays: ACAD_PDFDEFINITIONS and one PDFDEFINITION per file and page.
@@ -1653,6 +1670,15 @@ pub fn write(d: &Drawing) -> String {
         w.s(350, layout_handles.get(i).cloned().unwrap_or_default());
     }
     let layout_obj = |w: &mut W, h: &str, name: &str, tab: i64, brh: &str, flags: i64, page: &PageSetup| {
+        // VNCCad: plot area, window and plot style table (AcDbPlotSettings 74, 48/49/140/141, 7).
+        let plot_type = match page.plot_area.as_str() {
+            "display" => 0,
+            "extents" => 1,
+            "limits" => 2,
+            "window" => 4,
+            _ => 5,
+        };
+        let win = page.window.filter(|w| w.iter().all(|v| v.is_finite())).unwrap_or([0.0; 4]);
         w.s(0, "LAYOUT");
         w.s(5, h);
         w.s(330, layout_dict.clone());
@@ -1670,10 +1696,10 @@ pub fn write(d: &Drawing) -> String {
             (45, page.height_mm),
             (46, 0.0),
             (47, 0.0),
-            (48, 0.0),
-            (49, 0.0),
-            (140, 0.0),
-            (141, 0.0),
+            (48, win[0]),
+            (49, win[1]),
+            (140, win[2]),
+            (141, win[3]),
             (142, 1.0),
             (143, 1.0),
         ] {
@@ -1682,8 +1708,8 @@ pub fn write(d: &Drawing) -> String {
         w.i(70, 688);
         w.i(72, 0);
         w.i(73, i64::from(page.landscape));
-        w.i(74, 5);
-        w.s(7, "");
+        w.i(74, plot_type);
+        w.s(7, page.plot_style_table.clone());
         w.i(75, 16);
         w.f(147, 1.0);
         w.f(148, 0.0);
@@ -1704,7 +1730,8 @@ pub fn write(d: &Drawing) -> String {
         w.i(76, 0);
         w.s(330, brh);
     };
-    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &PageSetup::default());
+    let model_page = d.model_page.clone().unwrap_or_default();
+    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
         layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page);

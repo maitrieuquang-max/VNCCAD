@@ -879,6 +879,11 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     layout_objs.sort_by_key(|l| l.1);
     for (name, order, br, page) in &layout_objs {
         if name.eq_ignore_ascii_case("Model") {
+            // Keep the model page setup (AutoCAD always writes one; plot type "layout" is
+            // what older CADCraft files wrote as a placeholder).
+            if page.plot_area != "layout" || !page.plot_style_table.is_empty() {
+                d.model_page = Some(page.clone());
+            }
             continue;
         }
         d.layouts.push(Layout { page: page.clone(), ..Layout::new(name, *order) });
@@ -1087,6 +1092,12 @@ impl Objects {
                 });
             }
         }
+        // VNCCad settings.
+        let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::SETTINGS_KEY).map(|(h, _)| h.clone());
+        if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
+            let lines: Vec<String> = tags.iter().filter(|t| t.code == 1).map(Tag::str).collect();
+            crate::dxf_ext::apply_settings(d, &lines);
+        }
         // Parametric constraints and parameters.
         let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::CONSTRAINTS_KEY).map(|(h, _)| h.clone());
         if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
@@ -1209,5 +1220,23 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(name) = t.s(4).filter(|n| !n.is_empty()) {
         p.paper = name.replace('_', " ");
     }
+    // VNCCad: plot area, window and plot style table.
+    p.plot_area = match t.i(74) {
+        Some(0) => "display",
+        Some(1) => "extents",
+        Some(2) => "limits",
+        Some(4) => "window",
+        _ => "layout",
+    }
+    .into();
+    if p.plot_area == "window" {
+        let w = [t.fd(48, 0.0), t.fd(49, 0.0), t.fd(140, 0.0), t.fd(141, 0.0)];
+        if w.iter().all(|v| v.is_finite()) && (w[2] - w[0]).abs() > 1e-9 && (w[3] - w[1]).abs() > 1e-9 {
+            p.window = Some(w);
+        } else {
+            p.plot_area = "extents".into();
+        }
+    }
+    p.plot_style_table = t.s(7).unwrap_or_default();
     p
 }

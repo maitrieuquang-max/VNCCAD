@@ -52,7 +52,7 @@ fn scan() -> Db {
                 continue;
             }
             let ext = p.extension().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-            if ext != "ttf" && ext != "otf" {
+            if ext != "ttf" && ext != "otf" && ext != "ttc" {
                 continue;
             }
             if let Some(stem) = p.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()) {
@@ -87,6 +87,62 @@ pub fn register(name: &str, bytes: Vec<u8>) {
 fn key(name: &str) -> String {
     let n = name.trim().to_ascii_lowercase();
     n.trim_end_matches(".ttf").trim_end_matches(".otf").trim_end_matches(".ttc").to_string()
+}
+
+/// Parse a font file: a single face, or the first face of a collection (`.ttc`).
+fn face(bytes: &[u8]) -> Option<FontRef<'_>> {
+    FontRef::from_index(bytes, 0).ok()
+}
+
+/// Whether bytes are a font file this crate can read.
+pub fn is_font(bytes: &[u8]) -> bool {
+    face(bytes).is_some()
+}
+
+/// Whether a font has a glyph for `c`.
+pub fn has(font: &[u8], c: char) -> bool {
+    face(font).and_then(|f| f.charmap().map(c)).is_some_and(|g| g.to_u32() != 0)
+}
+
+/// VNCCad: a font with CJK ideographs (and wide Unicode coverage) used for characters the
+/// drawing's own fonts lack — Chinese/Japanese/Korean drawings whose SHX big fonts (gbcbig,
+/// hztxt, syfs…) or TrueType fonts (SimSun, SimHei…) are not installed. Looked up among the
+/// system fonts (or fonts given to the web app); `None` when none is available.
+pub fn fallback_cjk() -> Option<Arc<Vec<u8>>> {
+    static FOUND: OnceLock<Mutex<Option<Arc<Vec<u8>>>>> = OnceLock::new();
+    let slot = FOUND.get_or_init(|| Mutex::new(None));
+    if let Some(f) = slot.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+        return Some(f);
+    }
+    const NAMES: &[&str] = &[
+        // Windows
+        "simsun",
+        "msyh",
+        "simhei",
+        "msgothic",
+        "malgun",
+        "yugothr",
+        "arialuni",
+        // macOS
+        "pingfang",
+        "hiragino sans gb",
+        "stheiti medium",
+        "stheiti light",
+        "arial unicode",
+        // Linux
+        "notosanscjk-regular",
+        "notosanscjksc-regular",
+        "notosanssc-regular",
+        "wqy-microhei",
+        "wqy-zenhei",
+        "droidsansfallbackfull",
+        "droidsansfallback",
+        "fonts-japanese-gothic",
+        "notoserifcjk-regular",
+    ];
+    let f = NAMES.iter().filter_map(|n| find(n)).find(|b| has(b, '中'))?;
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(f.clone());
+    Some(f)
 }
 
 /// Bytes of a font by name, if installed. Stroke-font names (".shx", empty) return `None`.
@@ -221,9 +277,23 @@ fn glyph(font: &[u8], f: &FontRef, c: char) -> Arc<GlyphOutline> {
 /// Shape one line with a TrueType font: closed glyph contours grouped per glyph (baseline at
 /// y = 0, x from 0) plus `%%u`/`%%o` decorations as strokes. Text height = cap height.
 pub fn shape(font: &[u8], s: &str, height: f64, width_factor: f64, oblique: f64) -> Option<Shaped> {
-    let f = FontRef::new(font).ok()?;
+    shape_with(font, s, height, width_factor, oblique, false)
+}
+
+/// Height of an ideograph relative to the em (CJK glyphs fill about 0.88 em above the baseline
+/// in common fonts); fallback glyphs are scaled so an ideograph is as tall as the text height,
+/// like SHX big fonts.
+const IDEOGRAPH_EM: f64 = 0.88;
+
+/// Shape with fallback scaling: text height = ideograph height, not cap height.
+pub fn shape_fallback(font: &[u8], s: &str, height: f64, width_factor: f64, oblique: f64) -> Option<Shaped> {
+    shape_with(font, s, height, width_factor, oblique, true)
+}
+
+fn shape_with(font: &[u8], s: &str, height: f64, width_factor: f64, oblique: f64, em: bool) -> Option<Shaped> {
+    let f = face(font)?;
     let h = if height.is_finite() && height > 0.0 { height } else { 1.0 };
-    let scale = h / cap_height(&f);
+    let scale = if em { h / (f64::from(UPEM) * IDEOGRAPH_EM) } else { h / cap_height(&f) };
     let wf = if width_factor.is_finite() && width_factor.abs() > 1e-6 { width_factor } else { 1.0 };
     let shear = oblique.tan().clamp(-10.0, 10.0);
     let mut out = Shaped::default();
@@ -259,7 +329,7 @@ pub fn shape(font: &[u8], s: &str, height: f64, width_factor: f64, oblique: f64)
 
 /// Width of one line set in a TrueType font.
 pub fn width(font: &[u8], s: &str, height: f64, width_factor: f64) -> Option<f64> {
-    let f = FontRef::new(font).ok()?;
+    let f = face(font)?;
     let scale = height / cap_height(&f);
     let wf = if width_factor.is_finite() && width_factor.abs() > 1e-6 { width_factor } else { 1.0 };
     Some(crate::decode_controls(s).iter().map(|(c, _, _)| glyph(font, &f, *c).advance * scale * wf).sum())

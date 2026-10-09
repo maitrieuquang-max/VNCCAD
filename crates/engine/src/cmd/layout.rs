@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
             .params(
-                "{layout?: current, paper?: \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?}",
+                "{layout?: current, paper?: \"A4\"|\"A3\"|\"Letter\"|\"ANSI B\"|…, width?, height? (mm), landscape?, margins?: [l,b,r,t] mm, lineweights?, plotArea?, scale?, scaleToFit?, center?, plotStyleTable?, window?: [[x1,y1],[x2,y2]]} (in model space: the model page setup)",
             ),
         CommandSpec::new("plot", "Print...", |s, p| run_plot(s, p, "plot"))
             .menu(&["File", "Print..."])
@@ -661,25 +661,28 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "pagesetup";
-    let keys = ["paper", "width", "height", "landscape", "margins", "lineweights", "plotArea", "scale", "scaleToFit", "center", "plotStyleTable"];
+    let keys =
+        ["paper", "width", "height", "landscape", "margins", "lineweights", "plotArea", "scale", "scaleToFit", "center", "plotStyleTable", "window"];
     let changes = keys.iter().any(|k| p.get(k).is_some());
     let name = match (str_param(p, "layout"), s.space()) {
         (Some(n), _) => Some(layout_name(cmd, s.doc()?, n)?),
         (None, Space::Paper(n)) => Some(n),
         (None, Space::Model) => None,
     };
-    let Some(name) = name else {
-        if changes {
-            return Err(bad(cmd, "pass `layout` (model-space page setups are not stored yet)"));
-        }
-        // Report every layout's page setup.
+    if name.is_none() && !changes {
+        // Report every page setup.
         let d = s.doc()?;
         return Ok(json!({
+            "model": serde_json::to_value(cadcraft_io::pdf::model_page(d)).unwrap_or(Value::Null),
             "layouts": d.layouts.iter().map(|l| json!({"name": l.name, "page": serde_json::to_value(&l.page).unwrap_or(Value::Null)})).collect::<Vec<_>>(),
             "papers": cadcraft_render::PAPER_SIZES.iter().map(|p| p.name).collect::<Vec<_>>(),
         }));
+    }
+    // VNCCad: in model space the model page setup (saved with the drawing).
+    let mut page = match &name {
+        Some(n) => s.doc()?.layout(n).map(|l| l.page.clone()).unwrap_or_default(),
+        None => cadcraft_io::pdf::model_page(s.doc()?),
     };
-    let mut page = s.doc()?.layout(&name).map(|l| l.page.clone()).unwrap_or_default();
     if let Some(paper) = p.get("paper") {
         let n = paper.as_str().ok_or_else(|| bad(cmd, "`paper` must be a paper name"))?;
         let ps = cadcraft_render::paper_size(n).ok_or_else(|| {
@@ -732,13 +735,40 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = str_param(p, "plotStyleTable") {
         page.plot_style_table = v.chars().take(260).collect();
     }
-    if changes {
-        if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == name) {
-            l.page = page.clone();
+    if let Some(w) = p.get("window") {
+        page.window = Some(window_param(w).ok_or_else(|| bad(cmd, "`window` must be [[x1,y1],[x2,y2]] with a non-zero size"))?);
+        if str_param(p, "plotArea").is_none() {
+            page.plot_area = "window".into();
+        }
+    }
+    if page.plot_area == "window" && page.window.is_none() {
+        return Err(bad(cmd, "plot area `window` needs a `window`"));
+    }
+    if changes || p.get("window").is_some() {
+        match &name {
+            Some(n) => {
+                if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| &l.name == n) {
+                    l.page = page.clone();
+                }
+            }
+            None => s.doc_mut()?.model_page = Some(page.clone()),
         }
         s.touch();
     }
-    Ok(json!({ "layout": name, "page": serde_json::to_value(&page).unwrap_or(Value::Null) }))
+    Ok(json!({ "layout": name.unwrap_or_else(|| "Model".into()), "page": serde_json::to_value(&page).unwrap_or(Value::Null) }))
+}
+
+/// `[[x1, y1], [x2, y2]]` or `[x1, y1, x2, y2]` → `[x1, y1, x2, y2]` (lower-left first).
+pub(crate) fn window_param(v: &Value) -> Option<[f64; 4]> {
+    let a = v.as_array()?;
+    let n: Vec<f64> = match a.len() {
+        2 => a.iter().filter_map(Value::as_array).flat_map(|p| p.iter().take(2).filter_map(Value::as_f64)).collect(),
+        4 => a.iter().filter_map(Value::as_f64).collect(),
+        _ => return None,
+    };
+    let [x1, y1, x2, y2] = n[..] else { return None };
+    let w = [x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2)];
+    (w.iter().all(|v| v.is_finite()) && w[2] - w[0] > 1e-9 && w[3] - w[1] > 1e-9).then_some(w)
 }
 
 // ---------- plotting ----------
@@ -752,6 +782,15 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     };
     let opts = if p.is_object() { p.clone() } else { json!({}) };
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
+    // VNCCad: a plot style table saved in the drawing but missing here: plotted in object colours.
+    if p.get("plotStyleTable").is_none()
+        && let Some(name) = cadcraft_io::pdf::saved_plot_style(s.doc()?, &space)
+        && cadcraft_io::ctb::find(&name).is_err()
+    {
+        s.echo(format!(
+            "Không tìm thấy bảng nét in {name}: đã in theo màu đối tượng. Chép file .ctb cạnh bản vẽ (hoặc thư mục VNCCad/plotstyles), hoặc chọn bảng khác bằng PLOTSTYLE."
+        ));
+    }
     let layout = match &space {
         Space::Model => "Model".to_string(),
         Space::Paper(n) => n.clone(),
@@ -932,7 +971,10 @@ mod tests {
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "paper": "Z12"})).is_err());
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "margins": [1, 2]})).is_err());
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "width": 1e308, "height": 5})).is_err());
-        assert!(s.execute("pagesetup", &json!({"paper": "A4"})).is_err(), "model tab needs a layout");
+        // VNCCad: the model tab has its own page setup, saved with the drawing.
+        s.execute("pagesetup", &json!({"paper": "A4"})).unwrap();
+        assert!(s.doc().unwrap().model_page.as_ref().unwrap().paper.contains("A4"));
+        assert!(s.execute("pagesetup", &json!({"plotArea": "window"})).is_err(), "a window plot needs a window");
         let report = s.execute("pagesetup", &Value::Null).unwrap();
         assert!(report["papers"].as_array().unwrap().len() >= 10);
         s.execute("pagesetup", &json!({"layout": "Layout2", "width": 500, "height": 300})).unwrap();

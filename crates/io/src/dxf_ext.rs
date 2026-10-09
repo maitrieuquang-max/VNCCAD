@@ -20,6 +20,31 @@ use serde_json::Value;
 pub(crate) const APP: &str = "CADCRAFT";
 /// Named-object-dictionary key of the constraint XRECORD.
 pub(crate) const CONSTRAINTS_KEY: &str = "CADCRAFT_CONSTRAINTS";
+/// VNCCad: drawing settings AutoCAD has no DXF header variable for (annotation scale, …),
+/// kept as `NAME=value` lines in an XRECORD of the named object dictionary.
+pub(crate) const SETTINGS_KEY: &str = "VNCCAD_SETTINGS";
+
+/// Header variables saved in the settings XRECORD.
+pub(crate) fn settings_lines(d: &cadcraft_doc::Drawing) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in ["CANNOSCALE", "VNCCAD_PLOTSTYLE"] {
+        if let Some(v) = d.header.get(name).and_then(|v| v.as_str().map(str::to_string)).filter(|v| !v.is_empty()) {
+            out.push(format!("{name}={v}"));
+        }
+    }
+    out
+}
+
+/// Apply settings lines read back from the XRECORD.
+pub(crate) fn apply_settings(d: &mut cadcraft_doc::Drawing, lines: &[String]) {
+    for l in lines.iter().take(256) {
+        if let Some((k, v)) = l.split_once('=')
+            && matches!(k, "CANNOSCALE" | "VNCCAD_PLOTSTYLE")
+        {
+            d.header.set(k, cadcraft_doc::HVal::Str(v.chars().take(256).collect()));
+        }
+    }
+}
 
 /// Caps for hostile input.
 pub(crate) const MAX_XDATA_ITEMS: usize = 4096;

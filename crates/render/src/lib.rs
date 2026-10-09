@@ -500,7 +500,14 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     b.tris(ctx, c, &tris);
                 }
             } else {
-                for seg in hatch::pattern_lines(h, tol) {
+                let (lines, dense) = hatch::pattern_lines_lod(h, tol);
+                if dense && b.opts.fill {
+                    let loops: Vec<Vec<Vec2>> =
+                        h.loops.iter().map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol)).collect();
+                    let tris = fill::triangulate_evenodd(&loops);
+                    b.tris(ctx, rgb, &tris);
+                }
+                for seg in lines {
                     if seg.len() == 1 {
                         if let Some(p) = seg.first() {
                             b.point(ctx, rgb, *p);

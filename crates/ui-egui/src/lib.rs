@@ -233,6 +233,13 @@ impl CadApp {
             self.styled = true;
         }
         self.drain_control(ctx);
+        // VNCCad: UI steps requested by finished commands (PLOTWINDOW → save the PDF).
+        for (id, params) in std::mem::take(&mut self.session.ui_requests) {
+            if let Some(Err(e)) = menus::run_ui_command(self, &id, &params) {
+                self.session.echo(e);
+            }
+            ctx.request_repaint();
+        }
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
         }

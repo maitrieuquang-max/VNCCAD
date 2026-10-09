@@ -122,6 +122,23 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         }
         return Ok(s.active);
     }
+    // VNCCad: a TrueType/OpenType font (SimSun, Arial…) given to the app: used by text styles
+    // naming it, and as the fallback for characters other fonts lack (web builds read no
+    // system fonts).
+    let lower_name = name.to_ascii_lowercase();
+    if [".ttf", ".otf", ".ttc"].iter().any(|e| lower_name.ends_with(e)) {
+        let fname = file_name(name);
+        let stem = fname.rsplit_once('.').map_or(fname.as_str(), |(a, _)| a).to_string();
+        if !cadcraft_fonts::ttf::is_font(bytes) {
+            return Err(bad("open", format!("{fname}: không phải font TrueType/OpenType hợp lệ")));
+        }
+        cadcraft_fonts::ttf::register(&stem, bytes.to_vec());
+        s.echo(format!("Đã nạp font {fname}."));
+        for st in &mut s.docs {
+            st.revision += 1;
+        }
+        return Ok(s.active);
+    }
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let mut d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
     // VNCCad: text in legacy Vietnamese fonts (TCVN3 .VnTime…, VNI-Times…) becomes Unicode.

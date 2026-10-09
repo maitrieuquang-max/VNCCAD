@@ -6,7 +6,7 @@
 //! cadcraft-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png]
 //! cadcraft-cli commands [FILTER]                   command catalog (JSON)
 //! cadcraft-cli mcp [--connect HOST:PORT]           MCP server on stdio (headless or bridged to the app)
-//! cadcraft-cli perf [N]                            timing table on a synthetic N-entity drawing
+//! cadcraft-cli perf [N | FILE.dwg|dxf]                            timing table on a synthetic N-entity drawing
 //! cadcraft-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -22,7 +22,7 @@ const USAGE: &str = "usage:
   cadcraft-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg)]
   cadcraft-cli commands [FILTER]
   cadcraft-cli mcp [--connect HOST:PORT]
-  cadcraft-cli perf [N]
+  cadcraft-cli perf [N | FILE.dwg|dxf]
   cadcraft-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadcraft-cli --version";
 
@@ -188,18 +188,30 @@ fn perf(args: &[String]) -> Result<(), String> {
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::{select, snap};
     use std::time::Instant;
-    let n: usize = match args.first() {
-        Some(a) => a.parse().map_err(|_| format!("perf: bad entity count {a}"))?,
-        None => 200_000,
-    };
-    let n = n.clamp(1, 20_000_000);
-    let side = (n as f64).sqrt() * 10.0;
     let mut rows: Vec<(String, f64, String)> = Vec::new();
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
-
-    let t = Instant::now();
-    let d = synthetic(n, side)?;
-    rows.push(("build synthetic drawing".into(), ms(t), format!("{n} entities")));
+    // VNCCad: `perf FILE.dwg|dxf` times a real drawing (picks and snaps over its extents).
+    let file = args.first().filter(|a| a.parse::<usize>().is_err());
+    let (d, side, origin) = if let Some(path) = file {
+        let t = Instant::now();
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let d = cadcraft_io::read(&bytes, path).map_err(|e| e.to_string())?;
+        rows.push(("open file".into(), ms(t), format!("{} entities", d.entity_count())));
+        let ext = d.extents(&Space::Model);
+        let side = (ext.max.x - ext.min.x).max(ext.max.y - ext.min.y).max(1.0);
+        (d, side, ext.min)
+    } else {
+        let n: usize = match args.first() {
+            Some(a) => a.parse().map_err(|_| format!("perf: bad entity count {a}"))?,
+            None => 200_000,
+        };
+        let n = n.clamp(1, 20_000_000);
+        let side = (n as f64).sqrt() * 10.0;
+        let t = Instant::now();
+        let d = synthetic(n, side)?;
+        rows.push(("build synthetic drawing".into(), ms(t), format!("{n} entities")));
+        (d, side, Vec2::ZERO)
+    };
 
     // Display list at a 1600 px wide "zoom extents" view (tolerance = half a pixel).
     let px = side / 1600.0;
@@ -211,7 +223,7 @@ fn perf(args: &[String]) -> Result<(), String> {
     // Hit testing on a zoomed-in view (aperture = 5 px at 0.02 units/px).
     let ap = 0.1;
     let mut r = Rng(42);
-    let pts: Vec<Vec2> = (0..1000).map(|_| Vec2::new(r.range(0.0, side), r.range(0.0, side))).collect();
+    let pts: Vec<Vec2> = (0..1000).map(|_| origin + Vec2::new(r.range(0.0, side), r.range(0.0, side))).collect();
     let t = Instant::now();
     let first = select::pick(&d, &Space::Model, pts.first().copied().unwrap_or(Vec2::ZERO), ap);
     rows.push(("first pick (incl. index build)".into(), ms(t), format!("{first:?}")));
@@ -232,14 +244,14 @@ fn perf(args: &[String]) -> Result<(), String> {
     let mut sel = 0usize;
     let t = Instant::now();
     for k in 0..20 {
-        let c = Vec2::new(r.range(0.0, side), r.range(0.0, side));
+        let c = origin + Vec2::new(r.range(0.0, side), r.range(0.0, side));
         let half = side * 0.05;
         sel += select::select_window(&d, &Space::Model, Bounds2::new(c - Vec2::new(half, half), c + Vec2::new(half, half)), k % 2 == 1).len();
     }
     rows.push(("window/crossing select x20 (10% side)".into(), ms(t), format!("{sel} selected")));
 
     let t = Instant::now();
-    let fence: Vec<Vec2> = (0..4).map(|_| Vec2::new(r.range(0.0, side), r.range(0.0, side))).collect();
+    let fence: Vec<Vec2> = (0..4).map(|_| origin + Vec2::new(r.range(0.0, side), r.range(0.0, side))).collect();
     let fsel = select::select_fence(&d, &Space::Model, &fence).len();
     rows.push(("fence select (3 legs)".into(), ms(t), format!("{fsel} selected")));
 
