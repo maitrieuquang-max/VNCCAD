@@ -83,6 +83,35 @@ impl Default for Drawing {
 }
 
 impl Drawing {
+    /// VNCCad: the members of selectable groups that `hs` touch, added to `hs` (members that
+    /// no longer exist are skipped). Order: `hs` first.
+    pub fn expand_groups(&self, hs: &[Handle]) -> Vec<Handle> {
+        let mut out: Vec<Handle> = hs.to_vec();
+        if self.groups.is_empty() {
+            return out;
+        }
+        let mut seen: std::collections::HashSet<Handle> = hs.iter().copied().collect();
+        for g in self.groups.iter().filter(|g| g.selectable) {
+            if g.members.iter().any(|m| hs.contains(m)) {
+                for m in &g.members {
+                    if self.entity(*m).is_some() && seen.insert(*m) {
+                        out.push(*m);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// VNCCad: drop group members that no longer exist, and groups left with none.
+    pub fn prune_groups(&mut self) {
+        let alive: Vec<Vec<Handle>> = self.groups.iter().map(|g| g.members.iter().copied().filter(|m| self.entity(*m).is_some()).collect()).collect();
+        for (g, m) in self.groups.iter_mut().zip(alive) {
+            g.members = m;
+        }
+        self.groups.retain(|g| !g.members.is_empty());
+    }
+
     /// An empty drawing with the standard tables (inch-based, like acad.dwt-style defaults).
     pub fn new_imperial() -> Self {
         let mut d = Drawing::bare();

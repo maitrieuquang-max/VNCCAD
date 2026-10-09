@@ -40,6 +40,18 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 | Bảng nét in CTB | `PLOTSTYLE monochrome`, `grayscale` hoặc `<file>.ctb`; kéo-thả `.ctb` | Áp màu, độ dày nét, độ đậm nhạt theo số màu khi PLOT/EXPORTPDF; file `.ctb` đặt cạnh bản vẽ hoặc trong `VNCCad/plotstyles` |
 | In theo vùng chọn | `PLOTWINDOW` (`VUNGIN`, `PW`): chọn 2 góc khung tên → khổ giấy A4…A0 → lưu PDF; `PAGESETUP` trong Model | Dùng cho bản vẽ đặt nhiều tờ trong Model. Hướng giấy theo hình dạng vùng in; thiết lập in của Model (khổ, vùng in, bảng nét) lưu trong file như AutoCAD |
 
+### Giai đoạn 3 – nhóm, UCS, AutoLISP
+
+| Hạng mục | Lệnh / cách dùng | Ghi chú |
+|---|---|---|
+| Nhóm đối tượng | `GROUP` (`G`; tùy chọn Name/Description), `UNGROUP`, `GROUPEDIT`, `GROUPS`; `PICKSTYLE` / Ctrl+Shift+A bật-tắt chọn theo nhóm | Bấm một đối tượng chọn cả nhóm. Lưu DXF trong `ACAD_GROUP` như AutoCAD |
+| Hệ tọa độ người dùng | `UCS` (gốc + điểm trục X, `Object`, `Z`, `Previous`, `World`, `Named` Save/Restore/Delete), `UCSMAN` | Tọa độ gõ `x,y`, `@dx,dy`, `@d<a` theo UCS; `*x,y` là tọa độ thế giới. Ortho, polar, lưới, snap, con trỏ, biểu tượng UCS và tọa độ thanh trạng thái theo UCS. Lưu `$UCSORG/$UCSXDIR` và bảng UCS |
+| Xoay màn hình theo tuyến | `PLAN` (theo UCS hiện tại; `PLAN {"world":true}` về WCS) | Trục X của UCS nằm ngang màn hình — vẽ dọc tuyến đường, trục cầu xiên. Zoom, pan, chọn bằng cửa sổ đều theo màn hình đã xoay |
+| AutoLISP | `APPLOAD` (`AP`) hoặc kéo-thả `.lsp`; gõ tên lệnh `C:` đã nạp; gõ `(biểu thức)` hoặc `!biến` ở dòng lệnh; biểu thức trả lời được cả lời nhắc của lệnh khác | Có `defun`, `setq`, `if/cond/while/repeat/foreach`, `lambda/mapcar/apply`, hàm số học, chuỗi, danh sách, `wcmatch`, `vl-string-*`, `vl-sort`…; `command` (kể cả `pause`), `getpoint/getreal/getint/getdist/getangle/getstring/getkword/initget`, `entsel`, `ssget` (kể cả `"X"` + lọc), `entget/entmod/entmake/entdel/entlast/entnext`, `getvar/setvar`, `tblsearch`, `trans`, `osnap`, `*error*`. Một lệnh LISP = một bước Undo |
+| Script | `SCRIPT` hoặc kéo-thả `.scr` | Như AutoCAD: dấu cách/xuống dòng là Enter; dòng `(…)` chạy LISP |
+
+Giới hạn LISP: chưa có ActiveX (`vla-*`, `vlax-*`), hộp thoại DCL, reactor; `entmake` hỗ trợ LINE, CIRCLE, ARC, POINT, LWPOLYLINE, TEXT, MTEXT, INSERT. Lệnh LISP được chạy lại từ đầu sau mỗi lần nhập (phát lại các câu trả lời trước) — với chương trình hỏi hàng trăm lần có thể chậm.
+
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
 Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:

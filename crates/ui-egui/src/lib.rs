@@ -220,8 +220,13 @@ impl CadApp {
         if let Err(e) = self.run("open", json!({ "path": path })) {
             self.set_status(e);
         } else {
-            self.ui.start_tab = false;
-            self.canvas.zoom_pending = true;
+            let lower = path.to_ascii_lowercase();
+            // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
+            let support = [".lsp", ".scr", ".shx", ".ctb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
+            if !support {
+                self.ui.start_tab = false;
+                self.canvas.zoom_pending = true;
+            }
         }
     }
 

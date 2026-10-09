@@ -233,6 +233,10 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
+    ("UCSNAME", 2),
+    ("UCSORG", -3),
+    ("UCSXDIR", -3),
+    ("UCSYDIR", -3),
 ];
 
 fn header_vars(w: &mut W, d: &Drawing) {
@@ -1321,10 +1325,22 @@ pub fn write(d: &Drawing) -> String {
         }
     }
     w.s(0, "ENDTAB");
-    for name in ["VIEW", "UCS"] {
-        table_head(&mut w, name, 0);
-        w.s(0, "ENDTAB");
+    table_head(&mut w, "VIEW", 0);
+    w.s(0, "ENDTAB");
+    // VNCCad: named UCSs.
+    let ucss: Vec<&Ucs> = d.ucss.iter().filter(|u| !u.name.trim().is_empty() && !is_xref_dependent(&u.name)).collect();
+    let th = table_head(&mut w, "UCS", ucss.len());
+    for u in ucss {
+        record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        w.s(2, &u.name);
+        w.i(70, 0);
+        w.p(10, u.origin);
+        w.p(11, u.x_axis);
+        w.p(12, u.y_axis);
+        w.i(79, 0);
+        w.f(146, 0.0);
     }
+    w.s(0, "ENDTAB");
     let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative"];
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
@@ -1499,10 +1515,35 @@ pub fn write(d: &Drawing) -> String {
         w.s(350, settings_xrec.clone());
     }
     w.s(0, "DICTIONARY");
-    w.s(5, group_dict);
+    w.s(5, group_dict.clone());
     w.s(330, root_dict.clone());
     w.s(100, "AcDbDictionary");
     w.i(281, 1);
+    // VNCCad: groups (members that still exist).
+    let groups: Vec<(&Group, Vec<String>, String)> = d
+        .groups
+        .iter()
+        .map(|g| (g, g.members.iter().filter(|m| d.entity(**m).is_some()).map(|m| m.hex()).collect::<Vec<_>>()))
+        .filter(|(_, m)| !m.is_empty())
+        .map(|(g, m)| (g, m, w.h()))
+        .collect();
+    for (g, _, h) in &groups {
+        w.s(3, g.name.clone());
+        w.s(350, h.clone());
+    }
+    for (g, members, h) in &groups {
+        w.s(0, "GROUP");
+        w.s(5, h.clone());
+        w.group("ACAD_REACTORS", 330, &[&group_dict]);
+        w.s(330, group_dict.clone());
+        w.s(100, "AcDbGroup");
+        w.s(300, g.description.clone());
+        w.i(70, i64::from(g.name.starts_with('*')));
+        w.i(71, i64::from(g.selectable));
+        for m in members {
+            w.s(340, m.clone());
+        }
+    }
     // Table styles.
     w.s(0, "DICTIONARY");
     w.s(5, table_style_dict.clone());

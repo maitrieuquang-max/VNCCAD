@@ -75,7 +75,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     for ev in events {
         match ev {
             egui::Event::Text(t) => {
-                if t == " " && !text_prompt {
+                if t == " " && !text_prompt && !lisp_open(&app.cmd.buffer) {
                     submit(app);
                 } else {
                     app.cmd.buffer.push_str(&t);
@@ -123,6 +123,33 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
             _ => {}
         }
     }
+}
+
+/// VNCCad: an unfinished LISP expression (`(setq a` …): Space is part of it, not Enter.
+fn lisp_open(buf: &str) -> bool {
+    let t = buf.trim_start();
+    if !t.starts_with('(') {
+        return false;
+    }
+    let (mut depth, mut in_str, mut esc) = (0i32, false, false);
+    for c in t.chars() {
+        if in_str {
+            match (esc, c) {
+                (true, _) => esc = false,
+                (false, '\\') => esc = true,
+                (false, '"') => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0 || in_str
 }
 
 pub fn submit(app: &mut CadApp) {

@@ -19,19 +19,29 @@ pub struct Xf {
     pub center: Vec2,
     /// Pixels (points) per drawing unit.
     pub scale: f64,
+    /// VNCCad: view twist (radians): the world direction shown as screen right (PLAN).
+    pub rot: f64,
 }
 
 impl Xf {
     pub fn to_screen(&self, p: Vec2) -> Pos2 {
         let c = self.rect.center();
-        pos2(c.x + ((p.x - self.center.x) * self.scale) as f32, c.y - ((p.y - self.center.y) * self.scale) as f32)
+        let d = if self.rot == 0.0 { p - self.center } else { (p - self.center).rotate(-self.rot) };
+        pos2(c.x + (d.x * self.scale) as f32, c.y - (d.y * self.scale) as f32)
     }
     pub fn to_world(&self, p: Pos2) -> Vec2 {
         let c = self.rect.center();
-        Vec2::new(self.center.x + f64::from(p.x - c.x) / self.scale, self.center.y - f64::from(p.y - c.y) / self.scale)
+        let d = Vec2::new(f64::from(p.x - c.x) / self.scale, -f64::from(p.y - c.y) / self.scale);
+        self.center + if self.rot == 0.0 { d } else { d.rotate(self.rot) }
     }
     pub fn world_bounds(&self) -> Bounds2 {
-        Bounds2::new(self.to_world(self.rect.left_bottom()), self.to_world(self.rect.right_top()))
+        let r = self.rect;
+        Bounds2::from_points([r.left_bottom(), r.right_top(), r.left_top(), r.right_bottom()].map(|q| self.to_world(q)))
+    }
+    /// Screen direction (y down) of a world angle.
+    pub fn screen_dir(&self, angle: f64) -> egui::Vec2 {
+        let a = angle - self.rot;
+        vec2(a.cos() as f32, -a.sin() as f32)
     }
 }
 
@@ -153,45 +163,46 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     let t = Tokens::get();
     let s = &app.session.settings;
-    let wb = xf.world_bounds();
+    // VNCCad: the grid follows the UCS.
+    let ucs = app.session.ucs();
+    let r = xf.rect;
+    let lb = Bounds2::from_points([r.left_bottom(), r.right_top(), r.left_top(), r.right_bottom()].map(|q| ucs.to_ucs(xf.to_world(q))));
     if s.gridmode {
         let major_n = f64::from(s.gridmajor.max(1));
         let minor = adaptive(s.gridunit.x, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
-        let x0 = (wb.min.x / minor).floor() as i64;
-        let x1 = (wb.max.x / minor).ceil() as i64;
-        let y0 = (wb.min.y / minor).floor() as i64;
-        let y1 = (wb.max.y / minor).ceil() as i64;
+        let x0 = (lb.min.x / minor).floor() as i64;
+        let x1 = (lb.max.x / minor).ceil() as i64;
+        let y0 = (lb.min.y / minor).floor() as i64;
+        let y1 = (lb.max.y / minor).ceil() as i64;
+        let seg = |a: Vec2, b: Vec2| [xf.to_screen(ucs.to_world(a)), xf.to_screen(ucs.to_world(b))];
         if (x1 - x0) < 2000 && (y1 - y0) < 2000 {
             for i in x0..=x1 {
                 let x = i as f64 * minor;
-                let is_major = (x / major).round() * major - x == 0.0 || ((x / major) - (x / major).round()).abs() < 1e-6;
-                let sx = xf.to_screen(Vec2::new(x, 0.0)).x;
+                let is_major = ((x / major) - (x / major).round()).abs() < 1e-6;
                 lines.push(Shape::line_segment(
-                    [pos2(sx, xf.rect.top()), pos2(sx, xf.rect.bottom())],
+                    seg(Vec2::new(x, lb.min.y), Vec2::new(x, lb.max.y)),
                     Stroke::new(1.0, if is_major { t.grid_major } else { t.grid_minor }),
                 ));
             }
             for j in y0..=y1 {
                 let y = j as f64 * minor;
                 let is_major = ((y / major) - (y / major).round()).abs() < 1e-6;
-                let sy = xf.to_screen(Vec2::new(0.0, y)).y;
                 lines.push(Shape::line_segment(
-                    [pos2(xf.rect.left(), sy), pos2(xf.rect.right(), sy)],
+                    seg(Vec2::new(lb.min.x, y), Vec2::new(lb.max.x, y)),
                     Stroke::new(1.0, if is_major { t.grid_major } else { t.grid_minor }),
                 ));
             }
         }
         p.extend(lines);
     }
-    // Axes through the origin.
-    let o = xf.to_screen(Vec2::ZERO);
-    if xf.rect.y_range().contains(o.y) {
-        p.line_segment([pos2(xf.rect.left(), o.y), pos2(xf.rect.right(), o.y)], Stroke::new(1.0, t.axis_x));
+    // Axes through the world origin.
+    if let Some(sx) = clip_infinite(xf, Vec2::ZERO, Vec2::X, false) {
+        p.line_segment(sx, Stroke::new(1.0, t.axis_x));
     }
-    if xf.rect.x_range().contains(o.x) {
-        p.line_segment([pos2(o.x, xf.rect.top()), pos2(o.x, xf.rect.bottom())], Stroke::new(1.0, t.axis_y));
+    if let Some(sy) = clip_infinite(xf, Vec2::ZERO, Vec2::Y, false) {
+        p.line_segment(sy, Stroke::new(1.0, t.axis_y));
     }
 }
 
@@ -347,6 +358,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             offset: [(c.mesh_origin.x - xf.center.x) as f32, (c.mesh_origin.y - xf.center.y) as f32],
             scale: xf.scale as f32,
             center: [center.x, center.y],
+            rot: xf.rot as f32,
         },
     ));
     let mut shapes = Vec::new();
@@ -486,14 +498,15 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
         return hit.point;
     }
     let mut p = raw;
+    let ucs = app.session.ucs();
     if s.snapmode {
-        p = snap::grid_snap(p, s.snapunit, Vec2::ZERO);
+        p = snap::grid_snap_ucs(p, s.snapunit, &ucs);
     }
     if let Some(b) = base {
         if s.orthomode {
-            p = snap::ortho(b, p);
+            p = snap::ortho_ucs(b, p, &ucs);
         } else if s.polarmode
-            && let Some((q, a)) = snap::polar(b, p, s.polarang, (6.0 / xf.scale) / b.dist(p).max(1e-12))
+            && let Some((q, a)) = snap::polar_ucs(b, p, s.polarang, (6.0 / xf.scale) / b.dist(p).max(1e-12), &ucs)
         {
             p = q;
             app.canvas.polar_angle = Some(a);
@@ -516,7 +529,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let Ok(st) = app.session.state() else { return };
     let view = st.view();
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
-    let xf = Xf { rect, center: view.center, scale };
+    let xf = Xf { rect, center: view.center, scale, rot: app.session.state().map(|st| st.twist()).unwrap_or(0.0) };
     app.canvas.xf = Some(xf);
 
     // ---------- input ----------
@@ -555,10 +568,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             let d = hp - last;
             if let Ok(st) = app.session.state_mut() {
                 let v = st.view();
-                st.set_view_quiet(cadcraft_engine::View {
-                    center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
-                    height: v.height,
-                });
+                let delta = Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale).rotate(st.twist());
+                st.set_view_quiet(cadcraft_engine::View { center: v.center - delta, height: v.height });
             }
         }
         app.canvas.pan_last = Some(hp);
@@ -571,13 +582,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Re-read the view after navigation.
     let view = app.session.state().map(|s| s.view()).unwrap_or(view);
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
-    let xf = Xf { rect, center: view.center, scale };
+    let xf = Xf { rect, center: view.center, scale, rot: app.session.state().map(|st| st.twist()).unwrap_or(0.0) };
     app.canvas.xf = Some(xf);
     // The paper (display) transform; equal to `xf` except inside an MSPACE viewport.
     let (xf_paper, active_vp) = match app.session.state() {
         Ok(st) => {
             let pv = st.paper_view();
-            let xp = Xf { rect, center: pv.center, scale: f64::from(rect.height()) / pv.height.max(1e-12) };
+            let xp = Xf { rect, center: pv.center, scale: f64::from(rect.height()) / pv.height.max(1e-12), rot: 0.0 };
             (if st.mspace.is_some() { xp } else { xf }, st.active_viewport().map(|(_, v)| v))
         }
         Err(_) => (xf, None),
@@ -808,7 +819,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let a = xf.to_screen(pw.corner);
         let b = xf.to_screen(c);
         let r = Rect::from_two_pos(a, b);
-        let crossing = c.x < pw.corner.x;
+        let crossing = b.x < a.x;
         painter.rect_filled(r, 0.0, if crossing { t.crossing_fill } else { t.window_fill });
         let st = Stroke::new(1.0, if crossing { t.crossing_stroke } else { t.window_stroke });
         if crossing {
@@ -831,7 +842,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     // UCS icon, ViewCube and viewport label.
     if app.ui.show_ucs_icon {
-        draw_ucs_icon(&painter, rect);
+        draw_ucs_icon(&painter, rect, &xf, &app.session.ucs());
     }
     if app.ui.show_viewcube && sheet.is_none() {
         draw_viewcube(app, ui, rect);
@@ -873,10 +884,18 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
     let pb = (app.session.settings.pickbox as f32 + 1.0).max(3.0);
     let gap = if pickbox { pb } else { 0.0 };
     let st = Stroke::new(1.0, c);
-    p.line_segment([pos2(at.x - len, at.y), pos2(at.x - gap, at.y)], st);
-    p.line_segment([pos2(at.x + gap, at.y), pos2(at.x + len, at.y)], st);
-    p.line_segment([pos2(at.x, at.y - len), pos2(at.x, at.y - gap)], st);
-    p.line_segment([pos2(at.x, at.y + gap), pos2(at.x, at.y + len)], st);
+    // VNCCad: the crosshair follows the UCS axes.
+    let (ux, uy) = match app.canvas.xf {
+        Some(xf) => {
+            let a = app.session.ucs().angle;
+            (xf.screen_dir(a), xf.screen_dir(a + std::f64::consts::FRAC_PI_2))
+        }
+        None => (vec2(1.0, 0.0), vec2(0.0, -1.0)),
+    };
+    p.line_segment([at - ux * len, at - ux * gap], st);
+    p.line_segment([at + ux * gap, at + ux * len], st);
+    p.line_segment([at - uy * len, at - uy * gap], st);
+    p.line_segment([at + uy * gap, at + uy * len], st);
     if pickbox {
         p.rect_stroke(Rect::from_center_size(at, vec2(pb * 2.0, pb * 2.0)), 0.0, st, egui::StrokeKind::Middle);
     }
@@ -894,7 +913,7 @@ fn dynamic_input(app: &CadApp, p: &egui::Painter, at: Pos2) {
             cadcraft_engine::units::format_distance(base.dist(c), 2, 4),
             (base.angle_to(c).to_degrees() * 10.0).round() / 10.0
         );
-    } else if let Some(c) = app.canvas.cursor {
+    } else if let Some(c) = app.canvas.cursor.map(|c| app.session.ucs().to_ucs(c)) {
         text = format!(
             "{}   {}, {}",
             prompt.message,
@@ -909,16 +928,22 @@ fn dynamic_input(app: &CadApp, p: &egui::Painter, at: Pos2) {
     p.galley(r.min + vec2(5.0, 3.0), galley, Color32::BLACK);
 }
 
-fn draw_ucs_icon(p: &egui::Painter, rect: Rect) {
+/// UCS icon: axes along the current UCS as seen in the (possibly turned) view; the square marks
+/// the world coordinate system.
+fn draw_ucs_icon(p: &egui::Painter, rect: Rect, xf: &Xf, ucs: &cadcraft_engine::snap::Ucs2) {
     let t = Tokens::get();
-    let o = pos2(rect.left() + 36.0, rect.bottom() - 34.0);
+    let o = pos2(rect.left() + 60.0, rect.bottom() - 60.0);
     let st = Stroke::new(1.0, t.text_dim);
-    p.line_segment([o, o + vec2(60.0, 0.0)], st);
-    p.line_segment([o, o + vec2(0.0, -60.0)], st);
-    p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
+    let dx = xf.screen_dir(ucs.angle);
+    let dy = xf.screen_dir(ucs.angle + std::f64::consts::FRAC_PI_2);
+    p.line_segment([o, o + dx * 50.0], st);
+    p.line_segment([o, o + dy * 50.0], st);
+    if ucs.is_world() {
+        p.rect_stroke(Rect::from_center_size(o, vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
+    }
     let f = egui::FontId::proportional(13.0);
-    p.text(o + vec2(70.0, 0.0), egui::Align2::LEFT_CENTER, "X", f.clone(), t.text_dim);
-    p.text(o + vec2(0.0, -70.0), egui::Align2::CENTER_BOTTOM, "Y", f, t.text_dim);
+    p.text(o + dx * 60.0, egui::Align2::CENTER_CENTER, "X", f.clone(), t.text_dim);
+    p.text(o + dy * 60.0, egui::Align2::CENTER_CENTER, "Y", f, t.text_dim);
 }
 
 fn viewport_label(p: &egui::Painter, rect: Rect) {
@@ -951,7 +976,8 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     // WCS pill.
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, "WCS ⌄", crate::theme::small(), t.text_dim);
+    let label = if app.session.ucs().is_world() { "WCS ⌄" } else { "UCS ⌄" };
+    p.text(pill.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), t.text_dim);
 }
 
 /// The grip of a selected object under the cursor, if any.

@@ -52,7 +52,6 @@ fn run_cannoscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set("CANNOSCALE", cadcraft_doc::HVal::Str(v.clone()));
     let msg = format!("Tỷ lệ chú thích: {v}. Chữ và kích thước có kiểu annotative trong Model vẽ theo tỷ lệ này.");
-    s.echo(msg.clone());
     Ok(json!({ "scale": v, "factor": f, "message": msg }))
 }
 
@@ -88,7 +87,6 @@ fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let msg = if none { "Đã bỏ bảng nét in.".to_string() } else { format!("Bảng nét in: {name} (áp dụng khi PLOT/EXPORTPDF).") };
-    s.echo(msg.clone());
     Ok(json!({ "name": value, "message": msg }))
 }
 
@@ -127,14 +125,12 @@ fn run_plotwindow(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.model_page = Some(page);
         s.touch();
         let msg = "In toàn bộ bản vẽ (Extents).".to_string();
-        s.echo(msg.clone());
         return Ok(json!({ "message": msg }));
     }
     let a = point_req("plotwindow", p, "p1")?;
     let b = point_req("plotwindow", p, "p2")?;
     let w = super::layout::window_param(&json!([[a.x, a.y], [b.x, b.y]])).ok_or_else(|| bad("plotwindow", "vùng in phải có kích thước"))?;
     let msg = set_plot_window(s, w, str_param(p, "paper"), p.get("landscape").and_then(Value::as_bool))?;
-    s.echo(msg.clone());
     Ok(json!({ "window": w, "message": msg }))
 }
 
@@ -184,7 +180,8 @@ impl Interactive for PlotWindowM {
         }
         match i {
             Input::Keyword(k) if k == "Extents" => {
-                run_plotwindow(s, &json!({ "extents": true }))?;
+                let r = run_plotwindow(s, &json!({ "extents": true }))?;
+                super::group::echo_msg(s, &r);
                 s.ui_requests.push(("plot".into(), Value::Null));
                 Ok(Step::Done)
             }

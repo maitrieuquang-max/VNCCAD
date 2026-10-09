@@ -196,6 +196,45 @@ pub(crate) fn select_window_with(d: &Drawing, space: &Space, ix: &Option<std::sy
     out
 }
 
+/// VNCCad: window/crossing selection with a window drawn on a turned view (PLAN in a UCS):
+/// `a`, `b` are opposite corners in world coordinates, `rot` the view twist.
+pub fn select_window_turned(d: &Drawing, space: &Space, a: Vec2, b: Vec2, crossing: bool, rot: f64) -> Vec<Handle> {
+    if rot.abs() < 1e-12 {
+        return select_window(d, space, Bounds2::new(a, b), crossing);
+    }
+    let to_view = |p: Vec2| p.rotate(-rot);
+    let vb = Bounds2::new(to_view(a), to_view(b));
+    let quad = vb.corners().map(|c| c.rotate(rot));
+    let world_box = Bounds2::from_points(quad);
+    let ix = spatial::index(d, space);
+    let Some(cands) = candidates(d, space, &ix, &world_box, true, false) else { return Vec::new() };
+    let tol = (vb.width() + vb.height()).max(1e-9) / 2000.0;
+    let mut out = Vec::new();
+    for (e, _) in cands {
+        if !selectable(d, e) {
+            continue;
+        }
+        let polys: Vec<Vec<Vec2>> = hit_polylines(d, e, tol).into_iter().map(|pl| pl.into_iter().map(to_view).collect()).collect();
+        if polys.is_empty() {
+            continue;
+        }
+        let all_in = !is_infinite(e) && polys.iter().flatten().all(|p| vb.contains(*p));
+        let hit = all_in
+            || crossing
+                && polys.iter().any(|pl| {
+                    if pl.len() == 1 {
+                        pl.first().is_some_and(|p| vb.contains(*p))
+                    } else {
+                        pl.windows(2).any(|w| w.first().zip(w.get(1)).is_some_and(|(p, q)| seg_hits_box(*p, *q, &vb)))
+                    }
+                });
+        if hit {
+            out.push(e.handle);
+        }
+    }
+    out
+}
+
 /// Fence selection: entities crossed by the fence polyline.
 pub fn select_fence(d: &Drawing, space: &Space, fence: &[Vec2]) -> Vec<Handle> {
     let ix = spatial::index(d, space);

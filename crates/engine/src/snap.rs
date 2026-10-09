@@ -338,6 +338,53 @@ pub fn grid_snap(p: Vec2, unit: Vec2, origin: Vec2) -> Vec2 {
     Vec2::new(sx, sy)
 }
 
+/// VNCCad: a 2D user coordinate system: origin and X-axis angle (radians) in world coordinates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Ucs2 {
+    pub origin: Vec2,
+    pub angle: f64,
+}
+
+impl Ucs2 {
+    pub fn is_world(&self) -> bool {
+        self.origin == Vec2::ZERO && self.angle.abs() < 1e-12
+    }
+    /// World → UCS.
+    pub fn to_ucs(&self, p: Vec2) -> Vec2 {
+        (p - self.origin).rotate(-self.angle)
+    }
+    /// UCS → world.
+    pub fn to_world(&self, p: Vec2) -> Vec2 {
+        self.origin + p.rotate(self.angle)
+    }
+    /// A UCS-relative displacement in world coordinates.
+    pub fn dir_to_world(&self, d: Vec2) -> Vec2 {
+        d.rotate(self.angle)
+    }
+}
+
+/// Ortho along the UCS axes.
+pub fn ortho_ucs(base: Vec2, p: Vec2, ucs: &Ucs2) -> Vec2 {
+    if ucs.angle.abs() < 1e-12 {
+        return ortho(base, p);
+    }
+    let d = (p - base).rotate(-ucs.angle);
+    let d = if d.x.abs() >= d.y.abs() { Vec2::new(d.x, 0.0) } else { Vec2::new(0.0, d.y) };
+    base + d.rotate(ucs.angle)
+}
+
+/// Polar tracking with angles measured from the UCS X axis; the returned angle is in world.
+pub fn polar_ucs(base: Vec2, p: Vec2, inc: f64, tol: f64, ucs: &Ucs2) -> Option<(Vec2, f64)> {
+    let local = base + (p - base).rotate(-ucs.angle);
+    let (q, a) = polar(base, local, inc, tol)?;
+    Some((base + (q - base).rotate(ucs.angle), cadcraft_geom::norm_angle(a + ucs.angle)))
+}
+
+/// Grid snap on the UCS grid.
+pub fn grid_snap_ucs(p: Vec2, unit: Vec2, ucs: &Ucs2) -> Vec2 {
+    ucs.to_world(grid_snap(ucs.to_ucs(p), unit, Vec2::ZERO))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +431,23 @@ mod tests {
         let d = drawing();
         let h = osnap(&d, &Space::Model, Vec2::new(3.0, 0.2), 0.5, mode::PER, Some(Vec2::new(3.0, 4.0))).unwrap();
         assert!(h.point.near(Vec2::new(3.0, 0.0), 1e-9));
+    }
+
+    #[test]
+    fn ucs_ortho_polar_grid() {
+        let u = Ucs2 { origin: Vec2::new(100.0, 50.0), angle: 30f64.to_radians() };
+        let p = Vec2::new(7.0, 3.0);
+        assert!(u.to_ucs(u.to_world(p)).near(p, 1e-9));
+        assert!(u.to_world(Vec2::new(10.0, 0.0)).near(Vec2::new(100.0 + 10.0 * 0.866_025_403_784_438_6, 55.0), 1e-9));
+        // Ortho follows the rotated X axis.
+        let b = Vec2::new(100.0, 50.0);
+        let q = ortho_ucs(b, b + Vec2::new(10.0, 6.5), &u);
+        assert!(u.to_ucs(q).y.abs() < 1e-9);
+        // 0° in the UCS is 30° in the world.
+        let (_, a) = polar_ucs(b, b + Vec2::from_angle(31f64.to_radians()) * 5.0, 90f64.to_radians(), 0.05, &u).unwrap();
+        assert!((a - 30f64.to_radians()).abs() < 1e-9);
+        let g = grid_snap_ucs(u.to_world(Vec2::new(9.8, 20.3)), Vec2::new(10.0, 10.0), &u);
+        assert!(u.to_ucs(g).near(Vec2::new(10.0, 20.0), 1e-9));
     }
 
     #[test]

@@ -11,6 +11,7 @@
 pub mod assoc;
 pub mod cmd;
 pub mod grips;
+pub mod lisp;
 pub mod prompt;
 pub mod sample;
 pub mod select;
@@ -93,6 +94,11 @@ pub struct DocState {
     /// MSPACE: the layout viewport whose model space is being edited (None = paper space).
     pub mspace: Option<Handle>,
     pub views: Vec<(Space, View)>,
+    /// VNCCad: view twist per space (radians; PLAN turns the UCS X axis horizontal). Views
+    /// inside MSPACE viewports are never twisted.
+    pub twists: Vec<(Space, f64)>,
+    /// VNCCad: earlier UCSs (UCS Previous).
+    pub ucs_history: Vec<snap::Ucs2>,
     pub view_history: Vec<View>,
     pub uid: u64,
 }
@@ -115,6 +121,8 @@ impl DocState {
             space: Space::Model,
             mspace: None,
             views: Vec::new(),
+            twists: Vec::new(),
+            ucs_history: Vec::new(),
             view_history: Vec::new(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
@@ -133,6 +141,22 @@ impl DocState {
         match &e.kind {
             cadcraft_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.clone())),
             _ => None,
+        }
+    }
+    /// VNCCad: the screen rotation of the current view (radians, counter-clockwise world angle
+    /// shown as screen right).
+    pub fn twist(&self) -> f64 {
+        if self.active_viewport().is_some() {
+            return 0.0;
+        }
+        self.twists.iter().find(|(s, _)| *s == self.space).map_or(0.0, |(_, t)| *t)
+    }
+    pub fn set_twist(&mut self, t: f64) {
+        let t = if t.is_finite() { cadcraft_geom::norm_angle(t) } else { 0.0 };
+        let t = if (t - std::f64::consts::TAU).abs() < 1e-12 { 0.0 } else { t };
+        match self.twists.iter_mut().find(|(s, _)| *s == self.space) {
+            Some((_, slot)) => *slot = t,
+            None => self.twists.push((self.space.clone(), t)),
         }
     }
     pub fn paper_view(&self) -> View {
@@ -309,6 +333,8 @@ pub struct Session {
     /// VNCCad: UI commands a finished command asks the host to run next (e.g. PLOTWINDOW
     /// opens the PDF save dialog). The UI drains this every frame; headless hosts ignore it.
     pub ui_requests: Vec<(String, serde_json::Value)>,
+    /// VNCCad: AutoLISP variables, functions and loaded files.
+    pub lisp: lisp::Lisp,
 }
 
 impl Default for Session {
@@ -341,6 +367,7 @@ impl Session {
             untitled_counter: 0,
             last_dim: None,
             ui_requests: Vec::new(),
+            lisp: lisp::Lisp::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -499,7 +526,13 @@ impl Session {
         };
         let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
         let id = cmd::resolve_alias(&lower);
-        let spec = find_command(&id).ok_or_else(|| EngineError::UnknownCommand(name.to_string()))?;
+        let Some(spec) = find_command(&id) else {
+            // VNCCad: a C: command defined in LISP.
+            if self.lisp.has_command(&lower) {
+                return self.start_lisp(lisp::machine::Job::Call(lower));
+            }
+            return Err(EngineError::UnknownCommand(name.to_string()));
+        };
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.
             if spec.interactive.is_none() {
@@ -539,6 +572,26 @@ impl Session {
         }
     }
 
+    /// VNCCad: run LISP as the active command (it may ask the user for points, objects…).
+    pub fn start_lisp(&mut self, job: lisp::machine::Job) -> Result<()> {
+        if self.running.is_some() {
+            self.cancel();
+        }
+        let label = match &job {
+            lisp::machine::Job::Call(n) => n.to_ascii_uppercase(),
+            lisp::machine::Job::Eval { label, .. } => label.clone(),
+        };
+        if !label.is_empty() {
+            self.echo(format!("Command: {label}"));
+        }
+        let st = self.state()?;
+        let before = st.doc.clone();
+        let selection_before = st.selection.clone();
+        self.running = Some(Running { id: "lisp".into(), machine: Box::new(lisp::machine::LispM::new(job)), before, selection_before });
+        self.pending_window = None;
+        self.feed(None)
+    }
+
     /// Give an input to the running command. With no command running, `Enter` repeats the last
     /// command (as in AutoCAD) and points do nothing.
     pub fn input(&mut self, input: Input) -> Result<()> {
@@ -568,12 +621,13 @@ impl Session {
             Input::Point(p) => {
                 let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
                 if let Some(pw) = self.pending_window.take() {
-                    let crossing = p.x < pw.corner.x;
-                    let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
-                    return Ok(Some(Input::Pick(hs)));
+                    let rot = self.state()?.twist();
+                    let crossing = (p - pw.corner).rotate(-rot).x < 0.0;
+                    let hs = select::select_window_turned(self.doc()?, &space, pw.corner, p, crossing, rot);
+                    return Ok(Some(Input::Pick(self.with_groups(hs))));
                 }
                 match select::pick(self.doc()?, &space, p, ap) {
-                    Some(h) => Ok(Some(Input::Pick(vec![h]))),
+                    Some(h) => Ok(Some(Input::Pick(self.with_groups(vec![h])))),
                     None => {
                         self.pending_window = Some(PendingWindow { corner: p, during_command: true });
                         Ok(None)
@@ -703,6 +757,12 @@ impl Session {
                 if t.is_empty() {
                     return self.input(Input::Enter);
                 }
+                // VNCCad: AutoLISP at the command line: `(expr …)`, `!variable`.
+                if t.starts_with('(') || (t.starts_with('!') && t.len() > 1) {
+                    let src = t.strip_prefix('!').unwrap_or(t);
+                    let forms = lisp::read_all(src).map_err(|m| EngineError::Other(format!("; lỗi: {m}")))?;
+                    return self.start_lisp(lisp::machine::Job::Eval { forms, echo_result: true, label: String::new() });
+                }
                 // `cmd {json}`: programmatic call with parameters.
                 if let Some((name, json)) = t.split_once(' ')
                     && json.trim_start().starts_with('{')
@@ -731,7 +791,7 @@ impl Session {
             Some(_) => {
                 // Space acts as Enter except where the prompt wants free text.
                 let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
-                if text_prompt || !t.contains(' ') {
+                if text_prompt || !t.contains(' ') || t.trim_start().starts_with('(') {
                     return self.typed(t);
                 }
                 for tok in t.split_whitespace() {
@@ -756,13 +816,32 @@ impl Session {
         if tt.starts_with('\'') {
             return self.start(tt);
         }
-        if let Some(k) = prompt.match_keyword(tt)
+        // VNCCad: a LISP expression answers the prompt: `(polar p 0 5)` → a point.
+        if tt.starts_with('(') || (tt.starts_with('!') && tt.len() > 1) {
+            let v = lisp::eval_quiet(self, tt.strip_prefix('!').unwrap_or(tt)).map_err(|m| EngineError::Other(format!("; lỗi: {m}")))?;
+            let input = match &v {
+                lisp::V::Nil => Input::Enter,
+                lisp::V::Str(t) => Input::Text(t.clone()),
+                lisp::V::Int(n) => Input::Text(n.to_string()),
+                lisp::V::Real(r) => Input::Text(format!("{r}")),
+                lisp::V::Ename(h) => Input::Pick(vec![*h]),
+                other => match other.point() {
+                    Some(p) => Input::Point(self.ucs().to_world(p)),
+                    None => return Err(EngineError::Other("; lỗi: giá trị không dùng làm đầu vào được".into())),
+                },
+            };
+            return self.input(input);
+        }
+        // `_Close`: the language-independent keyword form used in scripts and LISP.
+        let kw_text = if tt.len() > 1 { tt.strip_prefix('_').unwrap_or(tt) } else { tt };
+        if let Some(k) = prompt.match_keyword(kw_text)
             && !(prompt.accept.number && tt.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point(tt, self.last_point) {
+            let ucs = self.ucs();
+            if let Some(p) = prompt::parse_point_ucs(tt, self.last_point, &ucs) {
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the rubber band.
@@ -771,7 +850,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode {
-                    c = snap::ortho(base, c);
+                    c = snap::ortho_ucs(base, c, &ucs);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
@@ -785,7 +864,8 @@ impl Session {
     /// prompts (as AutoCAD scripts do).
     pub fn script(&mut self, text: &str) -> Result<()> {
         for line in text.lines() {
-            let line = line.trim_end();
+            // A trailing space is an Enter in AutoCAD scripts: keep it.
+            let line = line.trim_end_matches('\r');
             if line.trim_start().starts_with(';') {
                 continue;
             }
@@ -796,7 +876,8 @@ impl Session {
             let mut rest = line;
             loop {
                 let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point);
-                if text_prompt || self.running.is_none() && rest.contains('{') {
+                // LISP expressions keep their spaces.
+                if text_prompt || self.running.is_none() && rest.contains('{') || rest.trim_start().starts_with('(') {
                     self.cmdline(rest)?;
                     break;
                 }
@@ -852,8 +933,10 @@ impl Session {
     pub fn idle_click(&mut self, p: Vec2, shift: bool) -> Result<()> {
         let space = self.space();
         if let Some(pw) = self.pending_window.take() {
-            let crossing = p.x < pw.corner.x;
-            let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
+            let rot = self.state()?.twist();
+            let crossing = (p - pw.corner).rotate(-rot).x < 0.0;
+            let hs = select::select_window_turned(self.doc()?, &space, pw.corner, p, crossing, rot);
+            let hs = self.with_groups(hs);
             let mut sel = if shift { Vec::new() } else { self.selection() };
             if shift {
                 let cur = self.selection();
@@ -868,16 +951,51 @@ impl Session {
         match select::pick(self.doc()?, &space, p, ap) {
             Some(h) => {
                 let mut sel = self.selection();
+                let hs = self.with_groups(vec![h]);
                 if shift {
-                    sel.retain(|x| *x != h);
-                } else if !sel.contains(&h) {
-                    sel.push(h);
+                    sel.retain(|x| !hs.contains(x));
+                } else {
+                    sel.extend(hs);
                 }
                 self.set_selection(sel);
             }
             None => self.pending_window = Some(PendingWindow { corner: p, during_command: false }),
         }
         Ok(())
+    }
+
+    /// VNCCad: the current UCS of the drawing ($UCSORG, $UCSXDIR); world when unset.
+    pub fn ucs(&self) -> snap::Ucs2 {
+        let Ok(d) = self.doc() else { return snap::Ucs2::default() };
+        if self.state().is_ok_and(|st| st.active_viewport().is_none() && st.space != Space::Model) {
+            // Paper space has its own (world) UCS.
+            return snap::Ucs2::default();
+        }
+        let o = d.header.point("UCSORG").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO);
+        let x = d.header.point("UCSXDIR").map(|p| p.xy()).filter(|p| p.is_finite() && p.len() > 1e-12).unwrap_or(Vec2::X);
+        snap::Ucs2 { origin: o, angle: x.angle() }
+    }
+
+    /// VNCCad: the view showing `pts` (world) with `margin` around them, in the current view
+    /// twist and window shape.
+    pub fn fit_view(&self, pts: &[Vec2], margin: f64) -> Option<View> {
+        let t = self.state().map(|s| s.twist()).unwrap_or(0.0);
+        let b = Bounds2::from_points(pts.iter().map(|p| p.rotate(-t)));
+        if b.is_empty() {
+            return None;
+        }
+        let (w, h) = self.viewport_px;
+        let aspect = w / h.max(1.0);
+        let height = (b.height().max(b.width() / aspect.max(1e-6)) * margin).max(1e-9);
+        Some(View { center: b.center().rotate(t), height })
+    }
+
+    /// VNCCad: picked objects plus the rest of their groups when group selection is on.
+    pub fn with_groups(&self, hs: Vec<Handle>) -> Vec<Handle> {
+        match self.doc() {
+            Ok(d) if !d.groups.is_empty() && cmd::group::group_selection_on(self) => d.expand_groups(&hs),
+            _ => hs,
+        }
     }
 
     /// Remember the selection used by a command as "Previous".
@@ -901,9 +1019,10 @@ impl Session {
         } else {
             ext
         };
-        let aspect = w / h.max(1.0);
-        let height = ext.height().max(ext.width() / aspect.max(1e-6)).max(1e-6) * 1.05;
-        self.state_mut()?.set_view(View { center: ext.center(), height });
+        let _ = (w, h);
+        if let Some(v) = self.fit_view(&ext.corners(), 1.05) {
+            self.state_mut()?.set_view(v);
+        }
         Ok(())
     }
 

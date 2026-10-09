@@ -167,6 +167,28 @@ pub fn parse_point(text: &str, last: Vec2) -> Option<Vec2> {
     r.is_finite().then_some(r)
 }
 
+/// VNCCad: parse a typed point in a UCS. `x,y` and `@dx,dy` / `@d<a` are UCS coordinates
+/// (angles from the UCS X axis); `*x,y` is a world point, `@*dx,dy` a world displacement.
+/// Returns world coordinates.
+pub fn parse_point_ucs(text: &str, last: Vec2, ucs: &crate::snap::Ucs2) -> Option<Vec2> {
+    let t = text.trim();
+    if ucs.is_world() {
+        return parse_point(t.replacen('*', "", 1).as_str(), last);
+    }
+    if let Some(w) = t.strip_prefix('*') {
+        return parse_point(w, last);
+    }
+    if let Some(w) = t.strip_prefix("@*") {
+        return parse_point(&format!("@{w}"), last);
+    }
+    if let Some(r) = t.strip_prefix('@') {
+        let d = parse_point(&format!("@{r}"), Vec2::ZERO)?;
+        return Some(last + ucs.dir_to_world(d));
+    }
+    let local = parse_point(t.trim_start_matches('#'), Vec2::ZERO)?;
+    Some(ucs.to_world(local))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

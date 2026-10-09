@@ -122,10 +122,27 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         }
         return Ok(s.active);
     }
+    // VNCCad: AutoLISP routines and scripts.
+    let lower_name = name.to_ascii_lowercase();
+    if lower_name.ends_with(".lsp") {
+        let fname = file_name(name);
+        let text = crate::lisp::machine::decode_source(bytes);
+        let forms = crate::lisp::read_all(&text).map_err(|m| bad("open", format!("{fname}: {m}")))?;
+        s.lisp.files.insert(fname.to_ascii_lowercase(), text);
+        let before = s.lisp.commands();
+        s.start_lisp(crate::lisp::machine::Job::Eval { forms, echo_result: false, label: String::new() })?;
+        let new: Vec<String> = s.lisp.commands().into_iter().filter(|c| !before.contains(c)).map(|c| c.to_ascii_uppercase()).collect();
+        s.echo(if new.is_empty() { format!("Đã nạp {fname}.") } else { format!("Đã nạp {fname}. Lệnh mới: {}", new.join(", ")) });
+        return Ok(s.active);
+    }
+    if lower_name.ends_with(".scr") {
+        let text = crate::lisp::machine::decode_source(bytes);
+        s.script(&text)?;
+        return Ok(s.active);
+    }
     // VNCCad: a TrueType/OpenType font (SimSun, Arial…) given to the app: used by text styles
     // naming it, and as the fallback for characters other fonts lack (web builds read no
     // system fonts).
-    let lower_name = name.to_ascii_lowercase();
     if [".ttf", ".otf", ".ttc"].iter().any(|e| lower_name.ends_with(e)) {
         let fname = file_name(name);
         let stem = fname.rsplit_once('.').map_or(fname.as_str(), |(a, _)| a).to_string();

@@ -93,10 +93,14 @@ fn fit(s: &mut Session, b: Bounds2) -> Result<()> {
     if b.is_empty() {
         return Ok(());
     }
-    let (w, h) = s.viewport_px;
-    let aspect = w / h.max(1.0);
-    let height = b.height().max(b.width() / aspect.max(1e-6)).max(1e-9);
-    s.state_mut()?.set_view(View { center: b.center(), height });
+    fit_points(s, &b.corners())
+}
+
+/// VNCCad: fit these points (a zoom window's two corners, or a box's four) in the twisted view.
+fn fit_points(s: &mut Session, pts: &[Vec2]) -> Result<()> {
+    if let Some(v) = s.fit_view(pts, 1.0) {
+        s.state_mut()?.set_view(v);
+    }
     Ok(())
 }
 
@@ -114,7 +118,7 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
         "window" | "w" => {
             let a = point_req("zoom", p, "p1")?;
             let b = point_req("zoom", p, "p2")?;
-            fit(s, Bounds2::new(a, b))?;
+            fit_points(s, &[a, b])?;
         }
         "previous" | "p" => {
             let st = s.state_mut()?;
@@ -166,7 +170,8 @@ fn pan_frac(s: &mut Session, f: Vec2) -> Result<Value> {
     let st = s.state_mut()?;
     let v = st.view();
     let ww = v.height * w / h.max(1.0);
-    st.set_view(View { center: v.center + Vec2::new(f.x * ww, f.y * v.height), height: v.height });
+    let d = Vec2::new(f.x * ww, f.y * v.height).rotate(st.twist());
+    st.set_view(View { center: v.center + d, height: v.height });
     ok()
 }
 
@@ -263,7 +268,7 @@ impl Interactive for ZoomM {
                     Ok(Step::Continue)
                 }
                 Some(a) => {
-                    fit(s, Bounds2::new(a, p))?;
+                    fit_points(s, &[a, p])?;
                     Ok(Step::Done)
                 }
             },

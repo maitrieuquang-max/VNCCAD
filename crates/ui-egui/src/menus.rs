@@ -91,6 +91,18 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        // VNCCad: pick a .lsp to load or a .scr to run (the file goes through open, which
+        // loads/runs it by its extension).
+        "appload" | "ap" | "script" | "scr" if params.is_null() => {
+            if let Some(req) = app.services.request_open.as_ref() {
+                req();
+                return Some(Ok(Value::Null));
+            }
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                app.open_path(&p);
+            }
+            Ok(Value::Null)
+        }
         "ui.saveas" | "saveas" if no_path => {
             let name = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing.dxf".into());
             let name = if name.contains('.') { name } else { format!("{name}.dxf") };

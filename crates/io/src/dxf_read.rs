@@ -725,6 +725,14 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
+            "UCS" => {
+                let name = t.s(2).unwrap_or_default();
+                let (o, x, y) = (t.p(10), t.p(11), t.p(12));
+                if !name.is_empty() && o.is_finite() && x.is_finite() && x.len() > 1e-12 && !d.ucss.iter().any(|u| u.name.eq_ignore_ascii_case(&name))
+                {
+                    d.ucss.push(Ucs { name, origin: o, x_axis: x, y_axis: if y.len() > 1e-12 { y } else { Vec3::new(-x.y, x.x, 0.0) } });
+                }
+            }
             "LAYER" => {
                 let name = t.s(2).unwrap_or_default();
                 if name.is_empty() {
@@ -1014,6 +1022,8 @@ struct Objects {
     table_styles: Vec<(String, Vec<Tag>)>,
     /// DIMASSOC objects.
     dimassocs: Vec<Vec<Tag>>,
+    /// VNCCad: GROUP objects: (handle, groups).
+    groups: Vec<(String, Vec<Tag>)>,
     /// IMAGEDEF handle (upper case) → image file path.
     imagedefs: HashMap<String, String>,
 }
@@ -1060,6 +1070,7 @@ impl Objects {
             }
             "TABLESTYLE" if self.table_styles.len() < MAX_OBJECTS => self.table_styles.push((h, tags.to_vec())),
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
+            "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
             _ => {}
         }
     }
@@ -1091,6 +1102,20 @@ impl Objects {
                     }
                 });
             }
+        }
+        // VNCCad: groups, named by their ACAD_GROUP entries.
+        for (h, tags) in &self.groups {
+            let t = T(tags);
+            let members: Vec<Handle> =
+                tags.iter().filter(|x| x.code == 340).filter_map(|x| Handle::parse_hex(&x.str())).filter(|m| d.entity(*m).is_some()).collect();
+            if members.is_empty() {
+                continue;
+            }
+            let name = self.names.get(h).cloned().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("*A{}", d.groups.len() + 1));
+            if d.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            d.groups.push(Group { name, description: t.s(300).unwrap_or_default(), selectable: t.i(71).unwrap_or(1) != 0, members });
         }
         // VNCCad settings.
         let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::SETTINGS_KEY).map(|(h, _)| h.clone());

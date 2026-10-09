@@ -255,7 +255,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         let mut rx = r.right() - 8.0 - toggles.len() as f32 * (size + 4.0);
         let coords_w = 210.0;
         // Coordinates.
-        let coord = app.canvas.cursor.map(|c| {
+        let coord = app.canvas.cursor.map(|c| app.session.ucs().to_ucs(c)).map(|c| {
             let (lu, lp) = app.session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
             format!(
                 "{}, {}, {}",

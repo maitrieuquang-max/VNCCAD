@@ -162,6 +162,8 @@ pub struct CanvasCallback {
     pub scale: f32,
     /// Canvas rect centre in points.
     pub center: [f32; 2],
+    /// VNCCad: view twist (radians).
+    pub rot: f32,
 }
 
 struct Batch {
@@ -188,7 +190,7 @@ const SHADER: &str = r#"
 struct View {
     a: vec4<f32>, // offset x, offset y (world), scale (device px per unit), 1 = linear output
     b: vec4<f32>, // canvas centre x, y (device px), screen w, h (device px)
-    c: vec4<f32>, // pixels per point
+    c: vec4<f32>, // pixels per point, cos(twist), sin(twist)
 };
 @group(0) @binding(0) var<uniform> view: View;
 
@@ -198,7 +200,8 @@ struct VOut {
 };
 
 fn to_px(p: vec2<f32>) -> vec2<f32> {
-    let w = (p + view.a.xy) * view.a.z;
+    let q = p + view.a.xy;
+    let w = vec2<f32>(q.x * view.c.y + q.y * view.c.z, -q.x * view.c.z + q.y * view.c.y) * view.a.z;
     return vec2<f32>(view.b.x + w.x, view.b.y - w.y);
 }
 
@@ -381,7 +384,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let [w, h] = screen.size_in_pixels;
         let a = [self.offset[0], self.offset[1], self.scale * ppp, if res.linear_out { 1.0 } else { 0.0 }];
         let b = [self.center[0] * ppp, self.center[1] * ppp, w.max(1) as f32, h.max(1) as f32];
-        let c = [ppp, 0.0, 0.0, 0.0];
+        let c = [ppp, self.rot.cos(), self.rot.sin(), 0.0];
         let bytes: Vec<u8> = a.iter().chain(&b).chain(&c).flat_map(|v| v.to_le_bytes()).collect();
         queue.write_buffer(&res.uniform, 0, &bytes);
         Vec::new()
