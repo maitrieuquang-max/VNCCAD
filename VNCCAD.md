@@ -72,7 +72,7 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 
 ### Giới hạn hiện tại
 
-- **DWG chỉ mở/lưu được trên bản desktop.** Trên web, hãy dùng DXF hoặc chuyển DWG sang DXF trước (ODA File Converter, hoặc mở bằng bản desktop rồi lưu DXF).
+- DWG trên bản web: đã bật đọc/ghi (cùng bộ đọc với bản desktop) nhưng chưa được thử trên trình duyệt thật; nếu trang báo lỗi với một file DWG, mở bằng bản desktop rồi lưu DXF. Bản vẽ rất lớn trên web có thể chậm hơn desktop.
 - Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
 - Bảng nét in theo tên (STB) chưa hỗ trợ; Xref lồng nhau (xref bên trong xref) không được nạp; ảnh/PDF nền chưa in ra PDF khi PLOT.
