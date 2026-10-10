@@ -4,7 +4,8 @@
 import { chromium } from 'playwright';
 
 const base = process.argv[2] || 'http://localhost:8080/';
-const url = new URL('?webgl&selftest&cjk', base).href;
+// `cjkcdn`: get the CJK font from the CDN (the path browsers without local font access take).
+const url = new URL(process.argv[3] || '?webgl&selftest&cjk&cjkcdn', base).href;
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
 try {

@@ -142,6 +142,11 @@ mod web {
         let (inbox, ctx) = (inbox.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let Some(window) = web_sys::window() else { return };
+            // `?cjkcdn` (self test): skip the computer's fonts, test the download.
+            if query().contains("cjkcdn") {
+                cdn_cjk_font(&inbox, &ctx, true).await;
+                return;
+            }
             let Ok(f) = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")) else { return };
             let Some(f) = f.dyn_ref::<js_sys::Function>() else {
                 log::warn!("queryLocalFonts is not available in this browser");

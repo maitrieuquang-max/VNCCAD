@@ -133,7 +133,15 @@ impl SelfTest {
             }
             Stage::Cjk => {
                 if cadcraft_fonts::ttf::fallback_cjk().is_some() {
-                    self.notes.push(format!("Font CJK có sau {:.0} ms", waited));
+                    // The web host names a downloaded font `cjk-local.otf`, a local one `.ttc`.
+                    let source = if app.session.log.iter().any(|l| l.contains("cjk-local.otf")) {
+                        "tải từ CDN"
+                    } else if app.session.log.iter().any(|l| l.contains("cjk-local.ttc")) {
+                        "font của máy"
+                    } else {
+                        "font hệ thống"
+                    };
+                    self.notes.push(format!("Font CJK ({source}) có sau {:.0} ms", waited));
                     self.next(Stage::Done, now);
                 } else if !self.asked_font {
                     self.asked_font = true;
