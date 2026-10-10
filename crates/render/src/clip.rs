@@ -188,6 +188,11 @@ pub fn in_polygon(poly: &[Vec2], p: Vec2) -> bool {
 
 /// The parts of the polyline `pts` inside `poly` (any simple polygon).
 pub fn clip_polyline_to_polygon(pts: &[Vec2], poly: &[Vec2]) -> Vec<Vec<Vec2>> {
+    split_polyline(pts, poly, true)
+}
+
+/// The parts of the polyline `pts` inside (`keep_inside`) or outside `poly`.
+fn split_polyline(pts: &[Vec2], poly: &[Vec2], keep_inside: bool) -> Vec<Vec<Vec2>> {
     let mut out: Vec<Vec<Vec2>> = Vec::new();
     let mut cur: Vec<Vec2> = Vec::new();
     let n = poly.len();
@@ -215,7 +220,7 @@ pub fn clip_polyline_to_polygon(pts: &[Vec2], poly: &[Vec2]) -> Vec<Vec<Vec2>> {
         for k in ts.windows(2) {
             let (Some(t0), Some(t1)) = (k.first().copied(), k.get(1).copied()) else { continue };
             let (p0, p1) = (a + d * t0, a + d * t1);
-            if in_polygon(poly, (p0 + p1) * 0.5) {
+            if in_polygon(poly, (p0 + p1) * 0.5) == keep_inside {
                 if cur.last().is_none_or(|l| !l.near(p0, 1e-9)) {
                     if cur.len() >= 2 {
                         out.push(std::mem::take(&mut cur));
@@ -356,6 +361,177 @@ pub fn clip_list_to_polygon(list: &mut crate::DisplayList, from: usize, poly: &[
     }
 }
 
+/// Keep the part of the convex polygon `subject` on the left of a→b (`left`) or on the right.
+fn half_plane(subject: &[Vec2], a: Vec2, b: Vec2, left: bool) -> Vec<Vec2> {
+    let side = |x: Vec2| {
+        let z = (b - a).cross(x - a);
+        if left { z >= 0.0 } else { z <= 0.0 }
+    };
+    let mut out = Vec::new();
+    let m = subject.len();
+    for j in 0..m {
+        let (Some(p), Some(q)) = (subject.get(j).copied(), subject.get((j + 1) % m).copied()) else { continue };
+        let (ip, iq) = (side(p), side(q));
+        if ip {
+            out.push(p);
+        }
+        if ip != iq {
+            let e = b - a;
+            let den = (q - p).cross(e);
+            if den.abs() > 1e-300 {
+                out.push(p + (q - p) * ((a - p).cross(e) / den));
+            }
+        }
+    }
+    out
+}
+
+/// A triangle minus a convex polygon, as triangles.
+fn subtract_convex(tri: &[Vec2], poly: &[Vec2]) -> Vec<Vec2> {
+    let n = poly.len();
+    let area: f64 = (0..n).filter_map(|i| Some(poly.get(i)?.cross(*poly.get((i + 1) % n)?))).sum();
+    let ccw = area >= 0.0;
+    let mut out = Vec::new();
+    // Inside the polygon = left of every edge (ccw). Outside = outside edge k, inside edges < k.
+    let mut rest: Vec<Vec2> = tri.to_vec();
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i).copied(), poly.get((i + 1) % n).copied()) else { continue };
+        let outside = half_plane(&rest, a, b, !ccw);
+        if outside.len() >= 3 {
+            let o = outside[0];
+            for w in outside[1..].windows(2) {
+                out.extend([o, w[0], w[1]]);
+            }
+        }
+        rest = half_plane(&rest, a, b, ccw);
+        if rest.len() < 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// A wipeout: the primitives drawn before primitive `before` lose what lies inside `poly`.
+pub struct Mask {
+    pub before: usize,
+    pub poly: Vec<Vec2>,
+    pub bounds: Bounds2,
+}
+
+/// Apply wipeouts (masks) to a display list: lines and fills drawn before a wipeout are cut
+/// away inside it, so every renderer (screen, PDF, SVG, PNG) shows the mask the same way.
+pub fn apply_masks(list: &mut crate::DisplayList, masks: &[Mask]) {
+    if masks.is_empty() {
+        return;
+    }
+    let all = masks.iter().fold(Bounds2::EMPTY, |a, m| a.union(&m.bounds));
+    if all.is_empty() || !all.min.is_finite() || !all.max.is_finite() {
+        return;
+    }
+    // A coarse grid of mask indices.
+    const G: usize = 64;
+    let cw = (all.width() / G as f64).max(1e-12);
+    let ch = (all.height() / G as f64).max(1e-12);
+    let cell = |p: Vec2| -> (usize, usize) {
+        let x = ((p.x - all.min.x) / cw).floor().clamp(0.0, (G - 1) as f64) as usize;
+        let y = ((p.y - all.min.y) / ch).floor().clamp(0.0, (G - 1) as f64) as usize;
+        (x, y)
+    };
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); G * G];
+    for (k, m) in masks.iter().enumerate() {
+        let (x0, y0) = cell(m.bounds.min);
+        let (x1, y1) = cell(m.bounds.max);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(c) = grid.get_mut(y * G + x) {
+                    c.push(k);
+                }
+            }
+        }
+    }
+    let last = masks.iter().map(|m| m.before).max().unwrap_or(0);
+    let old: Vec<crate::DPrim> = std::mem::take(&mut list.prims);
+    list.prims.reserve(old.len());
+    for (i, p) in old.into_iter().enumerate() {
+        // Drawn after every wipeout, or a construction line: untouched.
+        if i >= last || matches!(p.kind, crate::Kind::Infinite { .. }) {
+            list.prims.push(p);
+            continue;
+        }
+        let bb = Bounds2::from_points(list.points(&p).iter().copied());
+        if bb.is_empty() || !bb.intersects(&all) {
+            list.prims.push(p);
+            continue;
+        }
+        let (x0, y0) = cell(bb.min);
+        let (x1, y1) = cell(bb.max);
+        let mut cand: Vec<usize> = Vec::new();
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for &k in grid.get(y * G + x).map(Vec::as_slice).unwrap_or(&[]) {
+                    if masks.get(k).is_some_and(|m| m.before > i && m.bounds.intersects(&bb)) && !cand.contains(&k) {
+                        cand.push(k);
+                    }
+                }
+            }
+        }
+        if cand.is_empty() {
+            list.prims.push(p);
+            continue;
+        }
+        let pts: Vec<Vec2> = list.points(&p).to_vec();
+        match p.kind {
+            crate::Kind::Polyline => {
+                let mut pieces = vec![pts];
+                for k in &cand {
+                    let Some(m) = masks.get(*k) else { continue };
+                    pieces = pieces.iter().flat_map(|pc| split_polyline(pc, &m.poly, false)).collect();
+                }
+                for piece in pieces {
+                    let start = list.verts.len() as u32;
+                    let len = piece.len() as u32;
+                    list.verts.extend(piece);
+                    list.prims.push(crate::DPrim { start, len, ..p });
+                }
+            }
+            crate::Kind::Tris => {
+                let mut tris = pts;
+                for k in &cand {
+                    let Some(m) = masks.get(*k) else { continue };
+                    let convex = is_convex(&m.poly);
+                    let mut next = Vec::with_capacity(tris.len());
+                    for t in tris.chunks(3) {
+                        if t.len() < 3 {
+                            continue;
+                        }
+                        if convex {
+                            next.extend(subtract_convex(t, &m.poly));
+                        } else {
+                            let c = t.iter().fold(Vec2::ZERO, |a, b| a + *b) * (1.0 / 3.0);
+                            if !in_polygon(&m.poly, c) {
+                                next.extend_from_slice(t);
+                            }
+                        }
+                    }
+                    tris = next;
+                }
+                if tris.len() >= 3 {
+                    let start = list.tris.len() as u32;
+                    let len = tris.len() as u32;
+                    list.tris.extend(tris);
+                    list.prims.push(crate::DPrim { start, len, ..p });
+                }
+            }
+            crate::Kind::Point => {
+                if !cand.iter().filter_map(|k| masks.get(*k)).any(|m| in_polygon(&m.poly, pts.first().copied().unwrap_or_default())) {
+                    list.prims.push(p);
+                }
+            }
+            crate::Kind::Infinite { .. } => list.prims.push(p),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +560,31 @@ mod tests {
         let t = clip_triangles(&[Vec2::new(-5.0, 0.0), Vec2::new(5.0, 0.0), Vec2::new(5.0, 10.0)], &r());
         assert!(!t.is_empty() && t.len().is_multiple_of(3));
         assert!(t.iter().all(|p| p.x >= -1e-9));
+    }
+
+    #[test]
+    fn wipeouts_cut_lines_and_fills_drawn_before_them() {
+        use cadcraft_doc::{Common, Drawing, EntityKind, Line, Space, Wipeout};
+        use cadcraft_geom::Vec3;
+        let mut d = Drawing::new_metric();
+        d.header.set_i64("WIPEOUTFRAME", 0);
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(10.0, 0.0, 0.0) })).unwrap();
+        let solid = cadcraft_doc::Solid {
+            corners: [Vec3::new(0.0, -1.0, 0.0), Vec3::new(10.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(10.0, 1.0, 0.0)],
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Solid(solid)).unwrap();
+        let w = vec![Vec2::new(4.0, -2.0), Vec2::new(6.0, -2.0), Vec2::new(6.0, 2.0), Vec2::new(4.0, 2.0)];
+        d.add(&Space::Model, Common::default(), EntityKind::Wipeout(Wipeout { boundary: w })).unwrap();
+        // Drawn after the wipeout: stays whole.
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.5, 0.0), b: Vec3::new(10.0, 0.5, 0.0) })).unwrap();
+        let l = crate::build(&d, &Space::Model, &crate::Options::default());
+        let lines: Vec<Vec<Vec2>> = l.prims.iter().filter(|p| p.kind == crate::Kind::Polyline).map(|p| l.points(p).to_vec()).collect();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines.iter().any(|p| p.len() == 2 && p[0].near(Vec2::new(0.0, 0.0), 1e-9) && p[1].near(Vec2::new(4.0, 0.0), 1e-9)));
+        assert!(lines.iter().any(|p| p[0].near(Vec2::new(0.0, 0.5), 1e-9) && p[1].near(Vec2::new(10.0, 0.5), 1e-9)));
+        // The fill keeps 2 × 4 = 16 square units of its 20.
+        let tris: Vec<Vec2> = l.prims.iter().filter(|p| p.kind == crate::Kind::Tris).flat_map(|p| l.points(p).to_vec()).collect();
+        let area: f64 = tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
+        assert!((area - 16.0).abs() < 1e-6, "{area}");
     }
 }

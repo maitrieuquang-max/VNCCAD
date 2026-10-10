@@ -191,7 +191,7 @@ fn print_pdf(name: &str, bytes: &[u8]) -> Result<String, String> {
         if ok {
             return Ok(format!("Đã gửi {name} tới máy in mặc định."));
         }
-        let opened = Command::new("cmd").args(["/C", "start", "", &p]).creation_flags(NO_WINDOW).status().is_ok_and(|s| s.success());
+        let opened = Command::new("cmd").args(["/C", "start", "", &p]).creation_flags(NO_WINDOW).spawn().is_ok();
         if opened {
             return Ok(format!("Máy chưa có chương trình in PDF trực tiếp: đã mở {name}, hãy chọn In (Ctrl+P) trong trình xem."));
         }
@@ -202,7 +202,8 @@ fn print_pdf(name: &str, bytes: &[u8]) -> Result<String, String> {
             return Ok(format!("Đã gửi {name} tới máy in mặc định (lp)."));
         }
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        if Command::new(opener).arg(&p).status().is_ok_and(|s| s.success()) {
+        // Do not wait: the viewer stays open.
+        if Command::new(opener).arg(&p).spawn().is_ok() {
             return Ok(format!("Không gửi thẳng được tới máy in: đã mở {name}, hãy chọn In trong trình xem."));
         }
     }

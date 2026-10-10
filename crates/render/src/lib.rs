@@ -152,6 +152,8 @@ struct Builder<'a> {
     plotting: bool,
     /// Drawing units per paper unit for annotative text and dimensions.
     anno: f64,
+    /// VNCCad: wipeouts, applied when the list is complete.
+    masks: Vec<clip::Mask>,
 }
 
 impl Builder<'_> {
@@ -244,7 +246,7 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     let model_anno = if opts.anno_scale > 0.0 { opts.anno_scale } else { drawing_anno_scale(d) };
     // Paper space annotations are at paper size; model space ones scale to CANNOSCALE.
     let anno = if matches!(space, Space::Paper(_)) { 1.0 } else { model_anno };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, anno };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, anno, masks: Vec::new() };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -262,6 +264,7 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
             entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
         }
     }
+    clip::apply_masks(&mut b.list, &b.masks);
     b.list
 }
 
@@ -292,7 +295,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     // Annotative objects seen through a viewport take the viewport's scale.
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, anno: 1.0 / s };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, anno: 1.0 / s, masks: Vec::new() };
     for me in d.model.iter() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
             let eb = cadcraft_doc::entity_bounds(d, me, 0);
@@ -305,6 +308,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         }
         entity(&mut sub, &top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors), me);
     }
+    clip::apply_masks(&mut sub.list, &sub.masks);
     append_clipped(&mut b.list, &sub.list, &rect);
 }
 
@@ -365,7 +369,7 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
 /// Build the display list for a set of loose entities (previews, rubber bands).
 pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents: I, opts: &Options) -> DisplayList {
     let anno = if opts.anno_scale > 0.0 { opts.anno_scale } else { drawing_anno_scale(d) };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, anno };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, anno, masks: Vec::new() };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }
@@ -556,11 +560,21 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             }
         }
         EntityKind::Wipeout(w) => {
-            let mut pts = w.boundary.clone();
-            if let Some(f) = pts.first().copied() {
-                pts.push(f);
+            // VNCCad: hide what was drawn before it (applied when the list is complete).
+            if w.boundary.len() >= 3 {
+                let poly: Vec<Vec2> = w.boundary.iter().map(|p| ctx.xf.apply(*p)).collect();
+                let bounds = Bounds2::from_points(poly.iter().copied());
+                b.masks.push(clip::Mask { before: b.list.prims.len(), poly, bounds });
             }
-            b.polyline(ctx, rgb, lw, &pts);
+            // The frame: WIPEOUTFRAME 1 shown and plotted, 2 shown only, 0 hidden.
+            let frame = ctx.d.header.i64("WIPEOUTFRAME", 1);
+            if frame == 1 || (frame == 2 && !b.plotting) {
+                let mut pts = w.boundary.clone();
+                if let Some(f) = pts.first().copied() {
+                    pts.push(f);
+                }
+                b.polyline(ctx, rgb, lw, &pts);
+            }
         }
         EntityKind::Image(i) => {
             let o = i.insert.xy();
@@ -895,6 +909,11 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
     insert_body(b, ctx, e, ins, rgb);
     if let Some(poly) = clip {
         clip::clip_list_to_polygon(&mut b.list, first_prim, &poly);
+        // Wipeouts inside the clipped block: their positions moved with the clipping.
+        let n = b.list.prims.len();
+        for m in b.masks.iter_mut().filter(|m| m.before > first_prim) {
+            m.before = m.before.min(n);
+        }
     }
 }
 

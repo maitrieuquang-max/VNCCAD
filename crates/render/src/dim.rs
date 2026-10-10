@@ -582,18 +582,14 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let (tw, _) = measure(&g.mtext);
             let u = (tip - center).normalized();
             let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
-            // A on the line through the tip, B on the parallel line through the override.
+            // A on the line through the tip, B on the parallel line through the override; the
+            // jog crosses between them at 45° (DIMJOGANG).
             let a = tip + u * (jog - tip).dot(u);
             let b = over + u * (jog - over).dot(u);
-            let h = asz.max(1e-9);
-            // The jog: a short zig between the two parallel lines (45° like DIMJOGANG).
-            let side = (b - a).normalized();
-            let side = if side.is_finite() && side != Vec2::ZERO { side } else { u.perp() };
-            let mid = a.mid(b);
-            let _ = side;
-            let j1 = mid - u * (h * 0.5);
-            let j2 = mid + u * (h * 0.5);
-            g.dim(vec![tip, a, j1, j2, b, over]);
+            let w = a.dist(b);
+            let a1 = a - u * (w / 2.0);
+            let b1 = b + u * (w / 2.0);
+            g.dim(vec![tip, a1, b1, over]);
             end(&mut g, blk2, tip, u);
             let tpos = if d.user_text_pos { text_mid } else { tip + u * (asz.max(tsz) * 3.0) };
             g.dim(vec![tip, tpos]);

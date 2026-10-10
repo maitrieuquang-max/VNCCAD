@@ -75,6 +75,24 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | Block động | `DYNPROP` (`THUOCTINHDONG`): chọn block → đổi thuộc tính; bảng Properties có nhóm "Dynamic block" khi chọn một block động | Đọc từ file AutoCAD: tham số Linear với hành động Stretch / Move / Array, tham số Flip, tham số Visibility (trạng thái hiển thị). Đổi thuộc tính tạo block `*U` mới như AutoCAD. Đã đối chiếu với bản vẽ thật: dựng lại 8 block động (kéo giãn 1.825–6.000) có khung bao trùng khớp với hình AutoCAD đã lưu; riêng các bản lặp của hành động Array bị thiếu vì bộ đọc DWG làm mất danh sách đối tượng của hành động này |
 | Kiểm thử bản web trong trình duyệt thật | Mở trang với `?selftest` (CI chạy tự động bằng Chromium) | Mở DWG có chữ Việt + Trung và DWG 60.000 đối tượng theo đúng đường người dùng mở file, chạy LISP, tải font CJK từ CDN; đo thời gian luồng chính bị chiếm để phát hiện treo trang. Kết quả trên Chromium của GitHub Actions: DWG 60.000 đối tượng mở trong 0,9 s, font CJK tải xong 1,7 s, luồng chính bị chiếm lâu nhất 1,7 s (không treo). Kết quả hiện ở mục Annotations của mỗi lần chạy |
 
+### Giai đoạn 6 – lấp các lệnh 2D còn thiếu (mục tiêu 90% AutoCAD 2D)
+
+| Hạng mục | Lệnh | Ghi chú |
+|---|---|---|
+| Kiểm tra, sửa bản vẽ | `AUDIT` (`KIEMTRA`), `RECOVER` (`PHUCHOI`, File > Drawing Utilities) | Sửa: layer/kiểu đường/kiểu chữ/kiểu kích thước không tồn tại, block tham chiếu tới block thiếu, block tự chứa chính nó, đối tượng tọa độ hỏng hoặc rỗng, thành viên nhóm và trường đã mất, layer hiện hành không tồn tại. RECOVER = mở file rồi AUDIT |
+| Thứ tự vẽ | `DRAWORDER` (`DR`: Above/Under/Front/Back), `TEXTTOFRONT`, `HATCHTOBACK` | Above/Under theo đối tượng tham chiếu như AutoCAD |
+| Che nền (Wipeout) | `WIPEOUT`, `TEXTMASK` (`NENCHU`) | Wipeout giờ che thật các đối tượng vẽ trước nó — trên màn hình, PDF, SVG, PNG. Khung theo `WIPEOUTFRAME` (0 ẩn, 1 hiện và in, 2 chỉ hiện) |
+| Chọn | `SELECTSIMILAR` (`CHONGIONG`) | Cùng loại, cùng layer, cùng tên block / kiểu chữ / kiểu kích thước |
+| Layer | `COPYTOLAYER`, `LAYMRG` (`GIOPLAYER`), `LAYDEL` (`XOALAYER`) | Gộp/xóa cả đối tượng trong block; không cho xóa layer 0, Defpoints, layer xref |
+| Chữ | `SCALETEXT`, `JUSTIFYTEXT` (`CANHCHU`) | Đổi căn lề mà chữ đứng yên (TEXT và MTEXT) |
+| Mảng liên kết | `ARRAYRECT`, `ARRAYPOLAR` (gõ lệnh: Associative = Yes), `ARRAYEDIT` (`SUAMANG`) | Mảng là một đối tượng; ARRAYEDIT đổi số hàng/cột/khoảng cách, số phần tử/góc/xoay; EXPLODE trả lại từng đối tượng. Lưu trong bản ghi riêng của VNCCad (AutoCAD thấy block thường) |
+| Cắt hiển thị block/xref | `XCLIP` (`XC`): New (chữ nhật hoặc chọn polyline/đường tròn), Delete | Đọc và ghi SPATIAL_FILTER như AutoCAD (DXF và DWG): bản vẽ AutoCAD có xref bị cắt hiện đúng |
+| Thuộc tính block | `ATTSYNC` | Thêm/bớt thuộc tính theo định nghĩa mới, giữ giá trị theo tên thẻ |
+| Trường (Field) | `FIELD` (`TRUONG`), `UPDATEFIELD` | Diện tích, chu vi, chiều dài, bán kính của đối tượng (hệ số đổi đơn vị, số lẻ, chữ trước/sau — vd `S = 12.50 m²`), ngày, tên file, tên layout. Tự cập nhật sau mỗi lệnh (cùng bước Undo) |
+| Kích thước gấp khúc | `DIMJOGGED` (`JOG`) | Cho cung bán kính lớn (đường cong tuyến). Lưu DXF/DWG dạng kích thước bán kính kèm block hình vẽ, VNCCad đọc lại đủ điểm gấp |
+| Mặt tô 2D | `SOLID` (`SO`) | 3 hoặc 4 điểm như AutoCAD |
+| In ra máy in | `PRINTER` (`INMAY`, File > Print to Printer…, Ctrl+Shift+P) | Desktop: gửi PDF tới máy in mặc định (Windows qua chương trình đọc PDF có lệnh In; macOS/Linux qua `lp`), không được thì mở PDF để in; web: hộp thoại in của trình duyệt |
+
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
 Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:

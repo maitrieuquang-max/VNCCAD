@@ -376,6 +376,8 @@ mod tests {
         assert!((dm.p15.xy().len() - 500.0).abs() < 1e-9);
         let g = cadcraft_render::dimension_geometry(dm, &cadcraft_doc::DimStyle::default(), 1.0);
         assert!(g.mtext.contains("500"), "{}", g.mtext);
+        let l = cadcraft_render::build(&d, &cadcraft_doc::Space::Model, &cadcraft_render::Options::default());
+        assert!(l.prims.iter().filter(|p| p.handle == h).count() > 5, "line, arrow and text are drawn");
         let back = cadcraft_io::read(&cadcraft_io::write(&d, "j.dxf").unwrap(), "j.dxf").unwrap();
         let EntityKind::Dimension(b) = &back.entity(h).unwrap().kind else { panic!() };
         assert!(matches!(b.kind, DimKind::Jogged) && b.p13.xy().near(Vec2::new(300.0, 150.0), 1e-9));

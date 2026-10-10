@@ -26,6 +26,8 @@ pub enum Ask {
     Num { msg: String, default: Option<f64> },
     /// A point.
     Point(String),
+    /// A point, or Enter (answered as empty text).
+    PointOrEnter(String),
 }
 
 /// An answer.
@@ -148,6 +150,7 @@ impl Interactive for Flow {
                 p
             }
             Some(Ask::Point(m)) => Prompt::new(m.clone(), Accept::POINT),
+            Some(Ask::PointOrEnter(m)) => Prompt::new(m.clone(), Accept::POINT),
             None => Prompt::new("", Accept::TEXT),
         }
     }
@@ -201,7 +204,8 @@ impl Interactive for Flow {
                 },
                 _ => return Ok(Step::Continue),
             },
-            Ask::Point(_) => match i {
+            Ask::PointOrEnter(_) if i == Input::Enter => Ans::Text(String::new()),
+            Ask::Point(_) | Ask::PointOrEnter(_) => match i {
                 Input::Point(p) => Ans::Point(p),
                 Input::Text(t) => match crate::prompt::parse_point(&t, s.last_point) {
                     Some(p) => Ans::Point(p),

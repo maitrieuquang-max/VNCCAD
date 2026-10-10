@@ -64,6 +64,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?, justify: L|C|R|M|TL|TC|TR|ML|MC|MR|BL|BC|BR} → changes the justification point without moving the text")
             .interactive(|_| Ok(Box::new(Flow::new("justifytext", plan_justifytext, flow_justifytext))))
             .enabled(has_doc),
+        CommandSpec::new("solid", "2D Solid", run_solid)
+            .menu(&["Draw", "Modeling", "2D Solid"])
+            .alias(&["so"])
+            .params("{points: [[x,y] × 3 or 4]} (AutoCAD order: the 3rd and 4th corners cross)")
+            .interactive(|_| Ok(Box::new(Flow::new("solid", plan_solid, flow_solid))))
+            .enabled(has_doc),
         CommandSpec::new("textmask", "Text Mask", run_textmask)
             .menu(&["Express", "Text", "Text Mask"])
             .alias(&["nenchu"])
@@ -722,6 +728,36 @@ fn flow_textmask(s: &mut Session, a: &[Ans]) -> Result<Value> {
     let hs = a.first().map(Ans::sel).unwrap_or_default().to_vec();
     let out = mask_texts(s, &hs, a.get(1).and_then(Ans::num).unwrap_or(0.35))?;
     Ok(json!({ "message": format!("Đã che nền {} chữ.", out.len()) }))
+}
+
+// ------------------------------------------------------------------ SOLID
+
+fn add_solid(s: &mut Session, pts: &[Vec2]) -> Result<Handle> {
+    let p = |i: usize| pts.get(i).or_else(|| pts.get(2)).map(|v| cadcraft_geom::Vec3::new(v.x, v.y, 0.0));
+    let (Some(a), Some(b), Some(c), Some(d)) = (p(0), p(1), p(2), p(3)) else { return Err(bad("solid", "cần 3 hoặc 4 điểm")) };
+    s.add_entity(EntityKind::Solid(cadcraft_doc::Solid { corners: [a, b, c, d] }))
+}
+
+fn run_solid(s: &mut Session, p: &Value) -> Result<Value> {
+    let pts = points_param(p, "points").ok_or_else(|| bad("solid", "`points` is required"))?;
+    let h = add_solid(s, &pts)?;
+    Ok(json!({ "handle": h.hex() }))
+}
+
+fn plan_solid(_s: &Session, a: &[Ans]) -> Option<Ask> {
+    match a.len() {
+        0 => Some(Ask::Point("Điểm thứ nhất".into())),
+        1 => Some(Ask::Point("Điểm thứ hai".into())),
+        2 => Some(Ask::Point("Điểm thứ ba".into())),
+        3 => Some(Ask::PointOrEnter("Điểm thứ tư (Enter = tam giác)".into())),
+        _ => None,
+    }
+}
+
+fn flow_solid(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let pts: Vec<Vec2> = a.iter().filter_map(|x| if let Ans::Point(p) = x { Some(*p) } else { None }).collect();
+    add_solid(s, &pts)?;
+    Ok(Value::Null)
 }
 
 #[cfg(test)]
