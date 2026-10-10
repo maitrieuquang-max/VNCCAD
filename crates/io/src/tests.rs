@@ -1266,3 +1266,48 @@ fn table_formulas_survive_dxf_with_their_values() {
     assert_eq!(got.cells[0][2].text, "=A1*B1");
     assert_eq!(got.display_text(1, 2), "14");
 }
+
+/// VNCCad: a hatch bounded by a full-circle edge (AutoCAD writes start 0°, end 360°) keeps a
+/// closed round loop (it used to collapse to one vertex and vanish).
+#[test]
+fn hatch_with_a_circle_edge_is_a_disc() {
+    let g = |pairs: &[(i32, &str)]| pairs.iter().map(|(c, v)| format!("{c}\n{v}\n")).collect::<String>();
+    let mut s = g(&[(0, "SECTION"), (2, "ENTITIES")]);
+    s += &g(&[
+        (0, "HATCH"),
+        (5, "A1"),
+        (100, "AcDbEntity"),
+        (8, "0"),
+        (100, "AcDbHatch"),
+        (10, "0"),
+        (20, "0"),
+        (30, "0"),
+        (210, "0"),
+        (220, "0"),
+        (230, "1"),
+        (2, "SOLID"),
+        (70, "1"),
+        (71, "0"),
+        (91, "1"),
+        (92, "1"),
+        (93, "1"),
+        (72, "2"),
+        (10, "5"),
+        (20, "5"),
+        (40, "2"),
+        (50, "0"),
+        (51, "360"),
+        (73, "1"),
+        (97, "0"),
+        (75, "0"),
+        (76, "1"),
+        (98, "0"),
+    ]);
+    s += &g(&[(0, "ENDSEC"), (0, "EOF")]);
+    let d = read(s.as_bytes(), "h.dxf").unwrap();
+    let h = first(&d, |k| if let EntityKind::Hatch(h) = k { Some(h.clone()) } else { None });
+    let l = &h.loops[0];
+    assert!(l.vertices.len() >= 2, "{l:?}");
+    let area = cadcraft_geom::Polyline { vertices: l.vertices.clone(), closed: true }.area().abs();
+    assert!((area - std::f64::consts::PI * 4.0).abs() < 0.01, "{area}");
+}

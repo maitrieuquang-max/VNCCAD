@@ -491,7 +491,15 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         if verts.last().is_none_or(|l| !l.p.near(p0, 1e-9)) {
                             verts.push(PolyVertex::new(p0));
                         }
-                        if let Some(l) = verts.last_mut() {
+                        // VNCCad: arcs over a half turn (a full circle: start = end) go in two
+                        // halves; one vertex with an infinite bulge cannot close a loop.
+                        if sweep.abs() > std::f64::consts::PI {
+                            let half = sweep / 2.0;
+                            if let Some(l) = verts.last_mut() {
+                                l.bulge = cadcraft_geom::arc_to_bulge(half);
+                            }
+                            verts.push(PolyVertex::with_bulge(Vec2::polar(c, r, s + half), cadcraft_geom::arc_to_bulge(half)));
+                        } else if let Some(l) = verts.last_mut() {
                             l.bulge = cadcraft_geom::arc_to_bulge(sweep);
                         }
                         verts.push(PolyVertex::new(p1));

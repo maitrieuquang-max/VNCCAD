@@ -97,6 +97,7 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | Copy/Paste giữa hai bản vẽ | `COPYCLIP` / `PASTECLIP` | Giờ mang theo định nghĩa block (cả block lồng, block động), layer, kiểu đường, kiểu chữ, kiểu kích thước — trước đây dán block sang bản vẽ khác bị mất hình |
 | Công thức trong bảng | Gõ `=B2*C2`, `=SUM(B2:B10)`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `ROUND(x; n)` vào ô | Ô hiện giá trị; file lưu cả giá trị (AutoCAD và trình xem khác thấy số) lẫn công thức (VNCCad đọc lại). Đọc được số kiểu `12,5` và `1.250,75` |
 | Cắt kích thước | `DIMBREAK` (`CATKT`): Auto / Manual / Remove | Auto cắt đường kích thước và đường gióng nơi đối tượng khác cắt qua |
+| Hatch biên tròn | Đọc DXF/DWG | Hatch có biên là cung/đường tròn trọn vòng (cột tròn tô đặc…) hiện đúng; trước đây bị mất và AUDIT coi là lỗi |
 | Express Tools | `BURST` (`PHABLOCK`), `TXT2MTXT` (`GOPCHU`), `TCOUNT` (`DANHSO`) | BURST giữ giá trị thuộc tính thành chữ; TCOUNT đánh số cọc/mốc theo thứ tự X hoặc Y (ghi đè, thêm trước, thêm sau) |
 
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
