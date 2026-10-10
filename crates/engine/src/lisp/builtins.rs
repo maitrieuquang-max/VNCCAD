@@ -231,6 +231,9 @@ impl Run<'_> {
         if let Some(r) = self.dcl(name, &a) {
             return r;
         }
+        if let Some(r) = self.vlr(name, &a) {
+            return r;
+        }
         err(format!("không có hàm: {}", name.to_ascii_uppercase()))
     }
 

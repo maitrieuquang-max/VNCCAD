@@ -1192,6 +1192,8 @@ pub fn write(d: &Drawing) -> String {
     let constraints_xrec = w.h();
     let settings = dxf_ext::settings_lines(d);
     let settings_xrec = w.h();
+    let dyn_chunks = dxf_ext::dyn_chunks(d);
+    let dyn_xrec = w.h();
     // VNCCad: named plot styles used by layers (STB drawings): ACAD_PLOTSTYLENAME entries.
     let mut pstyles: Vec<(String, String)> = Vec::new();
     if d.layers.iter().any(|l| !l.plot_style.trim().is_empty() && !l.plot_style.eq_ignore_ascii_case("normal")) {
@@ -1533,6 +1535,10 @@ pub fn write(d: &Drawing) -> String {
         w.s(3, dxf_ext::SETTINGS_KEY);
         w.s(350, settings_xrec.clone());
     }
+    if dyn_chunks.is_some() {
+        w.s(3, dxf_ext::DYN_KEY);
+        w.s(350, dyn_xrec.clone());
+    }
     if !pstyles.is_empty() {
         w.s(3, "ACAD_PLOTSTYLENAME");
         w.s(350, pstyle_dict.clone());
@@ -1579,6 +1585,18 @@ pub fn write(d: &Drawing) -> String {
     }
     for (s, (_, h)) in table_styles.iter().zip(&cx.table_styles) {
         table_style_obj(&mut w, s, h, &table_style_dict);
+    }
+    // VNCCad: dynamic blocks.
+    if let Some(chunks) = &dyn_chunks {
+        w.s(0, "XRECORD");
+        w.s(5, dyn_xrec.clone());
+        w.group("ACAD_REACTORS", 330, &[&root_dict]);
+        w.s(330, root_dict.clone());
+        w.s(100, "AcDbXrecord");
+        w.i(280, 1);
+        for c in chunks {
+            w.s(1, c.clone());
+        }
     }
     // Parametric constraints and parameters (CADCraft data).
     if let Some(chunks) = &constraint_chunks {

@@ -42,6 +42,38 @@ jobs:
           path: dist/web
           if-no-files-found: error
 
+  web-test:
+    name: Web self test (Chromium)
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vnccad-web
+          path: site
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright
+        working-directory: packaging/web
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Run the self test
+        working-directory: packaging/web
+        run: |
+          (cd "$GITHUB_WORKSPACE/site" && python3 -m http.server 8080 >/dev/null 2>&1 &)
+          sleep 2
+          node selftest.mjs http://localhost:8080/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vnccad-web-selftest
+          path: packaging/web/selftest.png
+          if-no-files-found: ignore
+
   windows:
     name: Windows x64 (portable)
     runs-on: windows-latest

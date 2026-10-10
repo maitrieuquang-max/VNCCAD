@@ -20,6 +20,7 @@ mod cad;
 pub mod dcl;
 pub mod machine;
 mod vla;
+pub mod vlr;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
@@ -49,6 +50,8 @@ pub enum V {
     Fun(Arc<Lambda>),
     /// A built-in function as a value (`(function car)`, `'car` passed to `mapcar` stays a symbol).
     Subr(String),
+    /// VNCCad: a reactor (`vlr-…`), by id.
+    Vlr(u64),
 }
 
 #[derive(Debug, PartialEq)]
@@ -123,6 +126,7 @@ impl V {
             V::Ss(_) => "PICKSET",
             V::Fun(_) => "USUBR",
             V::Subr(_) => "SUBR",
+            V::Vlr(_) => "VLR-OBJECT",
         }
     }
 }
@@ -219,6 +223,9 @@ fn write_v(out: &mut String, v: &V, quote: bool, sets: &HashMap<u64, Vec<Handle>
         }
         V::Subr(n) => {
             let _ = write!(out, "#<SUBR @{}>", n.to_ascii_uppercase());
+        }
+        V::Vlr(id) => {
+            let _ = write!(out, "#<VLR-Reactor {id:x}>");
         }
     }
 }
@@ -414,6 +421,8 @@ pub struct Lisp {
     pub files: HashMap<String, String>,
     /// Loaded DCL files (`load_dialog` id, definitions).
     pub dcl: Vec<(i64, Vec<(String, dcl::Tile)>)>,
+    /// Reactors (`vlr-…`).
+    pub reactors: Vec<vlr::Reactor>,
 }
 
 impl Lisp {

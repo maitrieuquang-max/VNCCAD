@@ -1033,3 +1033,150 @@ fn layer_plot_styles_round_trip() {
     assert_eq!(back.layer("TIM").unwrap().plot_style, "Net dam");
     assert_eq!(back.layer("PHU").unwrap().plot_style, "Normal");
 }
+
+/// VNCCad: every DWG version keeps what the bridge carries, merged table cells included
+/// (R2010+ files store merges as a range list).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dwg_roundtrip_keeps_extension_data_in_every_version() {
+    for v in ["AC1015", "AC1018", "AC1024", "AC1027", "AC1032"] {
+        let mut d = extension_sample();
+        d.header.set("ACADVER", HVal::Str(v.into()));
+        let back = read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
+        assert_eq!(first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None }), table_sample(), "{v}");
+        assert_eq!(back.dim_style("Mech"), d.dim_style("Mech"), "{v}");
+        assert_eq!(back.constraints, d.constraints, "{v}");
+    }
+}
+
+/// VNCCad: a dynamic block as AutoCAD writes it (evaluation graph with a linear parameter and
+/// a stretch action; a reference `*U1` with its cached value) is read, then kept by VNCCad's own
+/// record through DXF and DWG.
+#[test]
+fn dynamic_blocks_from_autocad_objects_survive_saving() {
+    let g = |pairs: &[(i32, &str)]| pairs.iter().map(|(c, v)| format!("{c}\n{v}\n")).collect::<String>();
+    let line = |h: &str, x1: &str, y1: &str, x2: &str, y2: &str| {
+        g(&[(0, "LINE"), (5, h), (100, "AcDbEntity"), (8, "0"), (100, "AcDbLine"), (10, x1), (20, y1), (30, "0"), (11, x2), (21, y2), (31, "0")])
+    };
+    let mut s = String::new();
+    s += &g(&[(0, "SECTION"), (2, "TABLES"), (0, "TABLE"), (2, "BLOCK_RECORD")]);
+    s += &g(&[(0, "BLOCK_RECORD"), (5, "20"), (102, "{ACAD_XDICTIONARY"), (360, "30"), (102, "}"), (100, "AcDbBlockTableRecord"), (2, "COC")]);
+    s += &g(&[(0, "BLOCK_RECORD"), (5, "21"), (100, "AcDbBlockTableRecord"), (2, "*U1")]);
+    s += &g(&[(0, "ENDTAB"), (0, "ENDSEC"), (0, "SECTION"), (2, "BLOCKS")]);
+    s += &g(&[(0, "BLOCK"), (5, "50"), (8, "0"), (2, "COC"), (70, "0"), (10, "0"), (20, "0"), (30, "0")]);
+    s += &line("100", "0", "0", "1000", "0");
+    s += &line("101", "1000", "0", "1000", "200");
+    s += &g(&[(0, "ENDBLK"), (5, "51")]);
+    s += &g(&[(0, "BLOCK"), (5, "52"), (8, "0"), (2, "*U1"), (70, "1"), (10, "0"), (20, "0"), (30, "0")]);
+    s += &line("110", "0", "0", "1500", "0");
+    s += &line("111", "1500", "0", "1500", "200");
+    s += &g(&[(0, "ENDBLK"), (5, "53"), (0, "ENDSEC"), (0, "SECTION"), (2, "ENTITIES")]);
+    s += &g(&[
+        (0, "INSERT"),
+        (5, "200"),
+        (102, "{ACAD_XDICTIONARY"),
+        (360, "40"),
+        (102, "}"),
+        (100, "AcDbEntity"),
+        (8, "0"),
+        (100, "AcDbBlockReference"),
+        (2, "*U1"),
+        (10, "0"),
+        (20, "0"),
+        (30, "0"),
+    ]);
+    s += &g(&[(0, "ENDSEC"), (0, "SECTION"), (2, "OBJECTS")]);
+    s += &g(&[(0, "DICTIONARY"), (5, "30"), (330, "20"), (100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK"), (360, "31")]);
+    s += &g(&[(0, "ACAD_EVALUATION_GRAPH"), (5, "31"), (330, "30"), (100, "AcDbEvalGraph")]);
+    s += &g(&[
+        (0, "BLOCKLINEARPARAMETER"),
+        (5, "32"),
+        (330, "31"),
+        (100, "AcDbEvalExpr"),
+        (90, "34"),
+        (100, "AcDbBlockElement"),
+        (300, "Linear"),
+        (100, "AcDbBlockParameter"),
+        (100, "AcDbBlock2PtParameter"),
+        (1010, "0"),
+        (1020, "0"),
+        (1030, "0"),
+        (1011, "1000"),
+        (1021, "0"),
+        (1031, "0"),
+        (100, "AcDbBlockLinearParameter"),
+        (305, "Chiều dài"),
+        (140, "1000"),
+    ]);
+    s += &g(&[
+        (0, "BLOCKSTRETCHACTION"),
+        (5, "33"),
+        (330, "31"),
+        (100, "AcDbEvalExpr"),
+        (90, "41"),
+        (100, "AcDbBlockElement"),
+        (300, "Stretch"),
+        (100, "AcDbBlockAction"),
+        (70, "0"),
+        (71, "2"),
+        (330, "100"),
+        (330, "101"),
+        (1010, "0"),
+        (1020, "0"),
+        (1030, "0"),
+        (100, "AcDbBlockStretchAction"),
+        (92, "34"),
+        (93, "34"),
+        (301, "EndXDelta"),
+        (302, "EndYDelta"),
+        (72, "2"),
+        (1011, "900"),
+        (1021, "-10"),
+        (1011, "1100"),
+        (1021, "210"),
+        (140, "1.0"),
+        (141, "0.0"),
+    ]);
+    s += &g(&[(0, "DICTIONARY"), (5, "40"), (330, "200"), (100, "AcDbDictionary"), (3, "AcDbBlockRepresentation"), (360, "41")]);
+    s += &g(&[(0, "DICTIONARY"), (5, "41"), (330, "40"), (100, "AcDbDictionary"), (3, "AcDbRepData"), (360, "42"), (3, "AppDataCache"), (360, "43")]);
+    s += &g(&[(0, "ACDB_BLOCKREPRESENTATION_DATA"), (5, "42"), (330, "41"), (100, "AcDbBlockRepresentationData"), (70, "1"), (340, "20")]);
+    s += &g(&[(0, "DICTIONARY"), (5, "43"), (330, "41"), (100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCKDATA"), (360, "44")]);
+    s += &g(&[(0, "DICTIONARY"), (5, "44"), (330, "43"), (100, "AcDbDictionary"), (3, "34"), (360, "45")]);
+    s += &g(&[
+        (0, "XRECORD"),
+        (5, "45"),
+        (330, "44"),
+        (100, "AcDbXrecord"),
+        (280, "1"),
+        (70, "25"),
+        (70, "104"),
+        (10, "0"),
+        (20, "0"),
+        (30, "0"),
+        (10, "1500"),
+        (20, "0"),
+        (30, "0"),
+    ]);
+    s += &g(&[(0, "ENDSEC"), (0, "EOF")]);
+    let d = read(s.as_bytes(), "dyn.dxf").unwrap();
+    let def = d.block("COC").and_then(|b| b.dyn_def.clone()).expect("definition");
+    let p = def.params.first().unwrap();
+    assert_eq!((p.id, p.name.as_str(), p.kind), (34, "Chiều dài", cadcraft_doc::DynKind::Linear));
+    let a = p.actions.first().unwrap();
+    assert_eq!(a.kind, cadcraft_doc::DynActionKind::Stretch);
+    assert_eq!(a.entities, vec![Handle(0x100), Handle(0x101)]);
+    assert_eq!(a.frame.len(), 4);
+    let r = d.block("*U1").and_then(|b| b.dyn_ref.clone()).expect("reference");
+    assert_eq!(r.source, "COC");
+    assert_eq!(r.values, vec![(34, cadcraft_doc::DynValue::Distance(1500.0))]);
+    // VNCCad's own record keeps them (AutoCAD's objects are not written back).
+    for name in ["x.dxf", "x.dwg"] {
+        let back = read(&write(&d, name).unwrap(), name).unwrap();
+        assert_eq!(back.block("COC").and_then(|b| b.dyn_def.clone()), Some(def.clone()), "{name}");
+        // DWG renames anonymous blocks (*U1 → *U0): found through the INSERT.
+        let used = first(&back, |k| if let EntityKind::Insert(i) = k { Some(i.block.clone()) } else { None });
+        assert_eq!(back.block(&used).and_then(|b| b.dyn_ref.clone()), Some(r.clone()), "{name}");
+        let hs: Vec<Handle> = back.block("COC").unwrap().entities.iter().map(|e| e.handle).collect();
+        assert!(a.entities.iter().all(|h| hs.contains(h)), "{name}: entity handles kept");
+    }
+}

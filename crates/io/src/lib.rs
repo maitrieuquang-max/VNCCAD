@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ctb;
+mod dxf_dyn;
 mod dxf_ext;
 mod dxf_read;
 mod dxf_write;

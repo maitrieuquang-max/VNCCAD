@@ -28,7 +28,25 @@ mod web {
         Converted(String, Vec<u8>),
     }
 
-    struct Shell(CadApp, Inbox, Vec<Staged>);
+    struct Shell(CadApp, Inbox, Vec<Staged>, Option<cadcraft_ui_egui::selftest::SelfTest>);
+
+    /// VNCCad: publish the self test's result for the CI browser check: the page title and a
+    /// `<pre id="vnccad-selftest" data-result="ok|fail">` element.
+    fn report_selftest(r: &Result<String, String>) {
+        let (tag, text) = match r {
+            Ok(t) => ("ok", format!("SELFTEST OK: {t}")),
+            Err(t) => ("fail", format!("SELFTEST FAIL: {t}")),
+        };
+        log::info!("{text}");
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+        document.set_title(&text);
+        if let (Ok(pre), Some(body)) = (document.create_element("pre"), document.body()) {
+            pre.set_id("vnccad-selftest");
+            let _ = pre.set_attribute("data-result", tag);
+            pre.set_text_content(Some(&text));
+            let _ = body.append_child(&pre);
+        }
+    }
 
     impl eframe::App for Shell {
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -92,6 +110,13 @@ mod web {
                 }
             }
             self.0.logic(ctx);
+            if let Some(t) = self.3.as_mut() {
+                ctx.request_repaint();
+                if let Some(r) = t.step(&mut self.0, js_sys::Date::now()) {
+                    report_selftest(&r);
+                    self.3 = None;
+                }
+            }
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             self.0.ui(ui);
@@ -120,12 +145,14 @@ mod web {
             let Ok(f) = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")) else { return };
             let Some(f) = f.dyn_ref::<js_sys::Function>() else {
                 log::warn!("queryLocalFonts is not available in this browser");
+                cdn_cjk_font(&inbox, &ctx, true).await;
                 return;
             };
             let Ok(p) = f.call0(&window) else { return };
             let Ok(p) = p.dyn_into::<js_sys::Promise>() else { return };
             let Ok(list) = wasm_bindgen_futures::JsFuture::from(p).await else {
                 log::warn!("local font access was refused");
+                cdn_cjk_font(&inbox, &ctx, true).await;
                 return;
             };
             let list = js_sys::Array::from(&list);
@@ -140,6 +167,7 @@ mod web {
             }
             let Some(font) = chosen else {
                 log::warn!("no CJK font among the local fonts");
+                cdn_cjk_font(&inbox, &ctx, true).await;
                 return;
             };
             let Ok(blob_fn) = js_sys::Reflect::get(&font, &JsValue::from_str("blob")) else { return };
@@ -154,12 +182,62 @@ mod web {
         });
     }
 
+    /// VNCCad: open-licensed CJK fonts (SIL OFL) on public CDNs, tried in order. The first
+    /// covers Chinese (simplified and traditional), Japanese kana and Korean Hangul.
+    const CJK_FONT_URLS: [&str; 4] = [
+        "https://cdn.jsdelivr.net/npm/@chanmeng666/archlang-font-cjk@1.0.0/ArchLangCJKSans-Regular.otf",
+        "https://unpkg.com/@chanmeng666/archlang-font-cjk@1.0.0/ArchLangCJKSans-Regular.otf",
+        "https://cdn.jsdelivr.net/npm/@embedpdf/fonts-sc@1.0.0/fonts/NotoSansHans-Regular.otf",
+        "https://unpkg.com/@embedpdf/fonts-sc@1.0.0/fonts/NotoSansHans-Regular.otf",
+    ];
+
+    /// VNCCad: the CJK font from the browser's cache (`network` false: no download, used at
+    /// start-up so a font fetched once keeps working offline) or downloaded from a CDN and
+    /// cached. The font lands in `inbox` as `cjk-local.otf`.
+    async fn cdn_cjk_font(inbox: &Inbox, ctx: &egui::Context, network: bool) {
+        use wasm_bindgen::JsValue;
+        const BODY: &str = "return (async () => {
+            const tryCache = typeof caches !== 'undefined';
+            const c = tryCache ? await caches.open('vnccad-fonts').catch(() => null) : null;
+            for (const u of urls) {
+                let r = c ? await c.match(u).catch(() => undefined) : undefined;
+                if (!r && network) {
+                    try {
+                        r = await fetch(u, { mode: 'cors' });
+                        if (!r.ok) { r = undefined; continue; }
+                        if (c) { await c.put(u, r.clone()).catch(() => {}); }
+                    } catch (e) { r = undefined; }
+                }
+                if (r) { return new Uint8Array(await r.arrayBuffer()); }
+            }
+            return null;
+        })();";
+        let f = js_sys::Function::new_with_args("urls, network", BODY);
+        let urls = js_sys::Array::new();
+        for u in CJK_FONT_URLS {
+            urls.push(&JsValue::from_str(u));
+        }
+        let Ok(p) = f.call2(&JsValue::NULL, &urls, &JsValue::from_bool(network)) else { return };
+        let Ok(p) = p.dyn_into::<js_sys::Promise>() else { return };
+        match wasm_bindgen_futures::JsFuture::from(p).await {
+            Ok(v) if !v.is_null() && !v.is_undefined() => {
+                let bytes = js_sys::Uint8Array::new(&v).to_vec();
+                if bytes.len() > 1000 {
+                    inbox.borrow_mut().push(("cjk-local.otf".into(), bytes));
+                    ctx.request_repaint();
+                }
+            }
+            Ok(_) if network => log::warn!("could not download a CJK font (offline?)"),
+            _ => {}
+        }
+    }
+
     /// VNCCad: show the browser's file picker; the chosen drawing lands in `inbox`.
     fn request_open(inbox: &Inbox, ctx: &egui::Context) {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
         let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
         input.set_type("file");
-        input.set_accept(".dxf,.dwg,.shx,.lsp,.dcl,.scr,.ttf,.otf,.ttc,.ctb,.stb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
+        input.set_accept(".dxf,.dwg,.shx,.lsp,.dcl,.sld,.scr,.ttf,.otf,.ttc,.ctb,.stb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
         let (inbox, ctx, picker) = (inbox.clone(), ctx.clone(), input.clone());
         input.set_multiple(true);
         let on_change = Closure::once_into_js(move || {
@@ -317,6 +395,11 @@ mod web {
                         let inbox: Inbox = Rc::new(RefCell::new(Vec::new()));
                         let (ib, ctx) = (inbox.clone(), cc.egui_ctx.clone());
                         let (ib2, ctx2) = (inbox.clone(), cc.egui_ctx.clone());
+                        // A CJK font fetched in an earlier session (from the browser cache only).
+                        {
+                            let (ib3, ctx3) = (inbox.clone(), cc.egui_ctx.clone());
+                            wasm_bindgen_futures::spawn_local(async move { cdn_cjk_font(&ib3, &ctx3, false).await });
+                        }
                         let services = Services {
                             request_open: Some(Box::new(move || request_open(&ib, &ctx))),
                             download: Some(Box::new(download)),
@@ -331,7 +414,12 @@ mod web {
                         if query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));
                         }
-                        Ok(Box::new(Shell(app, inbox, Vec::new())))
+                        // VNCCad: `?selftest` (CI): open generated DWG files as a user would.
+                        let selftest = query().contains("selftest").then(|| {
+                            inbox.borrow_mut().extend(cadcraft_ui_egui::selftest::SelfTest::files());
+                            cadcraft_ui_egui::selftest::SelfTest::new(js_sys::Date::now(), query().contains("cjk"))
+                        });
+                        Ok(Box::new(Shell(app, inbox, Vec::new(), selftest)))
                     }),
                 )
                 .await;

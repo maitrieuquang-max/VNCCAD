@@ -41,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({ "available": cadcraft_fonts::ttf::fallback_cjk().is_some() }))
         })
         .menu(&["Tools", "Vietnamese", "Font for Chinese/Japanese/Korean Text"])
-        .params("{} → web: use a CJK font installed on this computer (the browser asks first)")
+        .params("{} → web: use a CJK font installed on this computer (the browser asks first), else download an open-licensed one once (cached for offline use)")
         .enabled(always)
         .noundo(),
         CommandSpec::new("shxfonts", "SHX Fonts", run_shxfonts)

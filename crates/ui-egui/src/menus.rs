@@ -107,7 +107,7 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             if cadcraft_fonts::ttf::fallback_cjk().is_some() {
                 app.session.echo("Đã có font cho chữ Trung/Nhật/Hàn.");
             } else if let Some(f) = app.services.local_fonts.as_ref() {
-                app.session.echo("Đang xin quyền đọc font của máy (trình duyệt sẽ hỏi)…");
+                app.session.echo("Đang tìm font chữ Trung/Nhật/Hàn: trước hết trong máy (Chrome/Edge sẽ hỏi quyền), nếu không có thì tải font mã nguồn mở (~11 MB, chỉ tải một lần, sau đó dùng được khi offline)…");
                 f();
             } else {
                 app.session

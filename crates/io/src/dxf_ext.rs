@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
-use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Handle, Parametric};
+use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Drawing, Handle, Parametric};
 use cadcraft_dxf::Tag;
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
@@ -396,6 +396,84 @@ pub(crate) fn constraint_chunks(constraints: &[Constraint], parametric: &Paramet
         return None;
     }
     let json = serde_json::to_string(&Payload { version: 1, constraints: constraints.to_vec(), parametric: parametric.clone() }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// VNCCad: dynamic block data (definitions' parameters and actions, references' values).
+pub(crate) const DYN_KEY: &str = "VNCCAD_DYNBLOCKS";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DynPayload {
+    version: u32,
+    /// Block name → (definition, reference values, the INSERTs using it: anonymous blocks may
+    /// be renamed by other programs, the INSERT handles stay).
+    blocks: Vec<(String, Option<cadcraft_doc::DynDef>, Option<cadcraft_doc::DynRef>, Vec<Handle>)>,
+}
+
+/// INSERT handles (model and paper space) by the block they insert.
+fn inserts_by_block(d: &Drawing) -> HashMap<String, Vec<Handle>> {
+    let mut m: HashMap<String, Vec<Handle>> = HashMap::new();
+    let mut add = |e: &cadcraft_doc::Entity| {
+        if let cadcraft_doc::EntityKind::Insert(i) = &e.kind {
+            m.entry(i.block.clone()).or_default().push(e.handle);
+        }
+    };
+    d.model.iter().for_each(|e| add(e));
+    d.layouts.iter().for_each(|l| l.entities.iter().for_each(|e| add(e)));
+    m
+}
+
+/// The dynamic-block XRECORD text, when some block is dynamic.
+pub(crate) fn dyn_chunks(d: &Drawing) -> Option<Vec<String>> {
+    if !d.blocks.values().any(|b| b.dyn_def.is_some() || b.dyn_ref.is_some()) {
+        return None;
+    }
+    let ins = inserts_by_block(d);
+    let mut blocks: Vec<(String, Option<cadcraft_doc::DynDef>, Option<cadcraft_doc::DynRef>, Vec<Handle>)> = d
+        .blocks
+        .iter()
+        .filter(|(_, b)| b.dyn_def.is_some() || b.dyn_ref.is_some())
+        .map(|(n, b)| {
+            let hs = if b.dyn_ref.is_some() { ins.get(n).map(|v| v.iter().take(8).copied().collect()).unwrap_or_default() } else { Vec::new() };
+            (n.clone(), b.dyn_def.clone(), b.dyn_ref.clone(), hs)
+        })
+        .collect();
+    if blocks.is_empty() {
+        return None;
+    }
+    blocks.sort_by(|a, b| a.0.cmp(&b.0));
+    let json = serde_json::to_string(&DynPayload { version: 1, blocks }).ok()?;
+    Some(json_chunks(&json))
+}
+
+/// Apply the dynamic-block XRECORD text (it replaces what was read from AutoCAD's objects).
+pub(crate) fn apply_dyn(d: &mut Drawing, text: &str) {
+    if text.len() > MAX_PAYLOAD {
+        return;
+    }
+    let Ok(p) = serde_json::from_str::<DynPayload>(text) else { return };
+    if p.version != 1 {
+        return;
+    }
+    let ins = inserts_by_block(d);
+    let by_handle: HashMap<Handle, String> = ins.iter().flat_map(|(n, hs)| hs.iter().map(move |h| (*h, n.clone()))).collect();
+    for (name, def, r, hs) in p.blocks {
+        // An anonymous reference block renamed elsewhere: found through its INSERTs.
+        let name = hs.iter().find_map(|h| by_handle.get(h).cloned()).unwrap_or(name);
+        if let Some(b) = d.blocks.get_mut(&name) {
+            let b = std::sync::Arc::make_mut(b);
+            if def.is_some() {
+                b.dyn_def = def;
+            }
+            if r.is_some() {
+                b.dyn_ref = r;
+            }
+        }
+    }
+}
+
+/// JSON split into XRECORD strings, with backslashes kept from being read as `\U+` escapes.
+fn json_chunks(json: &str) -> Vec<String> {
     let mut safe = String::with_capacity(json.len());
     let mut it = json.chars().peekable();
     while let Some(c) = it.next() {
@@ -413,7 +491,7 @@ pub(crate) fn constraint_chunks(constraints: &[Constraint], parametric: &Paramet
         }
     }
     let chars: Vec<char> = safe.chars().collect();
-    Some(chars.chunks(250).map(|c| c.iter().collect()).collect())
+    chars.chunks(250).map(|c| c.iter().collect()).collect()
 }
 
 /// Parse the constraint XRECORD text; `None` when it is not a payload we understand.

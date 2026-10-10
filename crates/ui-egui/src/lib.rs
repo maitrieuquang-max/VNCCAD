@@ -23,6 +23,7 @@ pub mod menus;
 pub mod palettes;
 pub mod parametric;
 pub mod quick;
+pub mod selftest;
 pub mod theme;
 
 use std::sync::mpsc::Receiver;
@@ -216,7 +217,7 @@ impl CadApp {
         });
         if has {
             self.session.echo(
-                "Bản vẽ có chữ Trung/Nhật/Hàn nhưng chưa có font để hiển thị: gõ CJKFONT để dùng font của máy (SimSun, Microsoft YaHei…), hoặc kéo-thả một file font (ví dụ simsun.ttc).",
+                "Bản vẽ có chữ Trung/Nhật/Hàn nhưng chưa có font để hiển thị: gõ CJKFONT (dùng font của máy, hoặc tải font mã nguồn mở), hoặc kéo-thả một file font (ví dụ simsun.ttc).",
             );
         }
     }
@@ -233,7 +234,7 @@ impl CadApp {
         let data = cadcraft_engine::cmd::file::base64_encode(bytes);
         let lower = name.to_ascii_lowercase();
         let font = [".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
-        let support = font || [".lsp", ".dcl", ".scr", ".shx", ".ctb", ".stb"].iter().any(|e| lower.ends_with(e));
+        let support = font || [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb"].iter().any(|e| lower.ends_with(e));
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
             self.set_status(e);
         } else if font {
@@ -253,7 +254,7 @@ impl CadApp {
         } else {
             let lower = path.to_ascii_lowercase();
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
-            let support = [".lsp", ".dcl", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
+            let support = [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
             if !support {
                 self.ui.start_tab = false;
                 self.canvas.zoom_pending = true;

@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod constraint;
+mod dynblock;
 mod entity;
 mod extents;
 mod header;
@@ -20,6 +21,7 @@ use std::collections::BTreeMap;
 pub use cadcraft_color as color;
 pub use cadcraft_geom as geom;
 pub use constraint::*;
+pub use dynblock::*;
 pub use entity::*;
 pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
 pub use header::{HVal, Header};

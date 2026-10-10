@@ -211,6 +211,13 @@ fn run_mirror(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Move the vertices of `e` that lie inside `bx` by `d` (STRETCH).
 fn stretch_entity(e: &mut Entity, bx: &cadcraft_geom::Bounds2, d: Vec2) {
+    stretch_entity_by(e, &|p| bx.contains(p), d);
+}
+
+/// Move the vertices of `e` for which `inside` holds by `d` (STRETCH, dynamic block stretch
+/// actions with polygon frames).
+pub(crate) fn stretch_entity_by(e: &mut Entity, inside: &dyn Fn(Vec2) -> bool, d: Vec2) {
+    let bx = Inside(inside);
     let mv = |p: &mut cadcraft_geom::Vec3| {
         if bx.contains(p.xy()) {
             p.x += d.x;
@@ -249,6 +256,15 @@ fn stretch_entity(e: &mut Entity, bx: &cadcraft_geom::Bounds2, d: Vec2) {
                 k.transform(&Mat3::translate(d));
             }
         }
+    }
+}
+
+/// A point test with the `contains` call shape of `Bounds2`.
+struct Inside<'a>(&'a dyn Fn(Vec2) -> bool);
+
+impl Inside<'_> {
+    fn contains(&self, p: Vec2) -> bool {
+        (self.0)(p)
     }
 }
 

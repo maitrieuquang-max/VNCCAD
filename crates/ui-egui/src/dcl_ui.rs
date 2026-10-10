@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use cadcraft_engine::Input;
-use cadcraft_engine::lisp::dcl::{Pending, Tile};
+use cadcraft_engine::lisp::dcl::{ImageOp, Pending, Tile, tile_size};
 use egui::vec2;
 use serde_json::json;
 
@@ -221,7 +221,7 @@ fn tile(ui: &mut egui::Ui, c: &mut Ctx, t: &Tile, parent: Option<&Tile>) {
                 c.changed(&key, 1);
             }
         }
-        "button" | "image_button" => {
+        "button" => {
             let l = label_of(t);
             let l = if l.is_empty() { key.clone() } else { l };
             let cancel = t.attr("is_cancel").is_some_and(|v| v.eq_ignore_ascii_case("true"));
@@ -233,11 +233,26 @@ fn tile(ui: &mut egui::Ui, c: &mut Ctx, t: &Tile, parent: Option<&Tile>) {
                 button(ui, c, &key, &l, enabled);
             }
         }
-        "image" => {
-            let w = width_of(t, "width").unwrap_or(80.0);
-            let h = t.attr("height").and_then(|h| h.parse::<f32>().ok()).map(|h| h * 15.0).unwrap_or(60.0);
-            let (r, _) = ui.allocate_exact_size(vec2(w, h), egui::Sense::hover());
-            ui.painter().rect_stroke(r, 2.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+        "image" | "image_button" => {
+            let (w, h) = tile_size(t);
+            let sense = if t.kind == "image_button" && enabled { egui::Sense::click() } else { egui::Sense::hover() };
+            let (r, resp) = ui.allocate_exact_size(vec2(w, h), sense);
+            let base = t.attr("color").and_then(color_attr);
+            paint_image(ui, r, c.p.images.get(&key).map(Vec::as_slice).unwrap_or(&[]), base);
+            if t.kind == "image_button" {
+                if resp.hovered() {
+                    ui.painter().rect_stroke(r, 2.0, ui.visuals().widgets.hovered.bg_stroke, egui::StrokeKind::Inside);
+                }
+                if resp.clicked() && c.pressed.is_none() {
+                    // AutoCAD sets the button's value to nothing and reports the click point.
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        let rel = p - r.min;
+                        c.vals.insert("$x".into(), format!("{}", rel.x.round()));
+                        c.vals.insert("$y".into(), format!("{}", rel.y.round()));
+                    }
+                    c.pressed = Some((key.clone(), 1));
+                }
+            }
         }
         "ok_only" | "ok_cancel" | "ok_cancel_help" | "ok_cancel_help_info" | "ok_cancel_help_errtile" => {
             ui.add_space(4.0);
@@ -277,6 +292,64 @@ fn tile(ui: &mut egui::Ui, c: &mut Ctx, t: &Tile, parent: Option<&Tile>) {
             }
         }
     }
+}
+
+/// An AutoCAD colour number in a dialog: negative numbers are the dialog's own colours.
+fn dcl_color(ui: &egui::Ui, c: i32) -> egui::Color32 {
+    match c {
+        -2 => crate::theme::Tokens::get().canvas,
+        -15 => ui.visuals().window_fill,
+        -16 => ui.visuals().text_color(),
+        -18 | -17 => ui.visuals().widgets.noninteractive.bg_stroke.color,
+        0 => egui::Color32::BLACK,
+        1..=255 => {
+            let rgb = cadcraft_color::aci_rgb(c as u8);
+            egui::Color32::from_rgb(rgb.0, rgb.1, rgb.2)
+        }
+        _ => ui.visuals().text_color(),
+    }
+}
+
+/// The `color` attribute of an image tile: a number or a DCL colour name.
+fn color_attr(v: &str) -> Option<i32> {
+    let v = v.trim().to_ascii_lowercase();
+    v.parse::<i32>().ok().or(match v.as_str() {
+        "dialog_line" => Some(-18),
+        "dialog_foreground" => Some(-16),
+        "dialog_background" => Some(-15),
+        "graphics_background" | "black" => Some(0),
+        "graphics_foreground" | "white" => Some(7),
+        "red" => Some(1),
+        "yellow" => Some(2),
+        "green" => Some(3),
+        "cyan" => Some(4),
+        "blue" => Some(5),
+        "magenta" => Some(6),
+        _ => None,
+    })
+}
+
+/// Draw an image tile: its background, then what the routine drew (`fill_image`,
+/// `vector_image`, `slide_image`), clipped to the tile.
+fn paint_image(ui: &egui::Ui, r: egui::Rect, ops: &[ImageOp], base: Option<i32>) {
+    let p = ui.painter().with_clip_rect(r);
+    p.rect_filled(r, 0.0, dcl_color(ui, base.unwrap_or(-15)));
+    let at = |x: f32, y: f32| egui::pos2(r.min.x + x, r.min.y + y);
+    for op in ops {
+        match op {
+            ImageOp::Fill { x, y, w, h, color } => {
+                p.rect_filled(egui::Rect::from_min_size(at(*x, *y), vec2(*w, *h)), 0.0, dcl_color(ui, *color));
+            }
+            ImageOp::Line { x1, y1, x2, y2, color } => {
+                p.line_segment([at(*x1, *y1), at(*x2, *y2)], egui::Stroke::new(1.0, dcl_color(ui, *color)));
+            }
+            ImageOp::Poly { points, color } => {
+                let pts: Vec<egui::Pos2> = points.iter().map(|(x, y)| at(*x, *y)).collect();
+                p.add(egui::Shape::convex_polygon(pts, dcl_color(ui, *color), egui::Stroke::NONE));
+            }
+        }
+    }
+    ui.painter().rect_stroke(r, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 }
 
 /// Show the dialog a LISP routine is waiting on, if any.

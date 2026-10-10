@@ -39,7 +39,39 @@ mod native {
         let doc = std::panic::catch_unwind(move || acadrust::DwgReader::from_stream(Cursor::new(data)).read())
             .map_err(|_| "the DWG reader failed on this file".to_string())?
             .map_err(|e| format!("DWG: {e}"))?;
+        let mut doc = doc;
+        sync_table_merges(&mut doc);
         acadrust::DxfWriter::new(&doc).write_to_vec().map_err(|e| format!("DWG→DXF: {e}"))
+    }
+
+    /// VNCCad: R2010+ DWG tables come back with a merged-range list but every cell's span at 1,
+    /// and the DXF writer only writes the spans: put the spans back so merged cells survive.
+    fn sync_table_merges(doc: &mut acadrust::CadDocument) {
+        let needs = doc.entities().any(|e| {
+            matches!(e, acadrust::EntityType::Table(t) if !t.merged_ranges.is_empty() && !t.rows.iter().any(|r| r.cells.iter().any(|c| c.is_merged())))
+        });
+        if !needs {
+            return;
+        }
+        for e in doc.entities_mut() {
+            let acadrust::EntityType::Table(t) = e else { continue };
+            if t.rows.iter().any(|r| r.cells.iter().any(|c| c.is_merged())) {
+                continue;
+            }
+            for r in t.merged_ranges.clone() {
+                if r.right_col < r.left_col || r.bottom_row < r.top_row {
+                    continue;
+                }
+                for (ri, row) in t.rows.iter_mut().enumerate().take(r.bottom_row.saturating_add(1)).skip(r.top_row) {
+                    for (ci, cell) in row.cells.iter_mut().enumerate().take(r.right_col.saturating_add(1)).skip(r.left_col) {
+                        cell.merged = 1;
+                        let top_left = ri == r.top_row && ci == r.left_col;
+                        cell.merge_width = if top_left { i32::try_from(r.right_col - r.left_col + 1).unwrap_or(1) } else { 0 };
+                        cell.merge_height = if top_left { i32::try_from(r.bottom_row - r.top_row + 1).unwrap_or(1) } else { 0 };
+                    }
+                }
+            }
+        }
     }
 
     /// Convert DXF bytes into a DWG file.

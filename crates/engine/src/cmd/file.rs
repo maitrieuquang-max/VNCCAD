@@ -135,6 +135,13 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(if new.is_empty() { format!("Đã nạp {fname}.") } else { format!("Đã nạp {fname}. Lệnh mới: {}", new.join(", ")) });
         return Ok(s.active);
     }
+    if lower_name.ends_with(".sld") {
+        let fname = file_name(name);
+        crate::lisp::dcl::parse_slide(bytes).map_err(|m| bad("open", format!("{fname}: {m}")))?;
+        s.binary_files.insert(fname.to_ascii_lowercase(), bytes.to_vec());
+        s.echo(format!("Đã nạp slide {fname} (dùng bằng slide_image trong hộp thoại LISP)."));
+        return Ok(s.active);
+    }
     if lower_name.ends_with(".dcl") {
         let fname = file_name(name);
         let text = crate::lisp::machine::decode_source(bytes);

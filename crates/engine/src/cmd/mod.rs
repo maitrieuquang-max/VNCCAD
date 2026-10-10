@@ -7,6 +7,7 @@ mod blocks;
 pub mod constraints;
 mod draw;
 mod draw2;
+pub mod dynblock;
 mod edit;
 pub mod file;
 mod gripcmds;
@@ -184,6 +185,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(xref::specs());
         v.extend(road::specs());
         v.extend(table::specs());
+        v.extend(dynblock::specs());
         v.extend(constraints::specs());
         v
     })

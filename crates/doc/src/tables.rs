@@ -464,6 +464,12 @@ pub struct Block {
     pub explodable: bool,
     #[serde(default)]
     pub units: u8,
+    /// VNCCad: a dynamic block definition's parameters and actions.
+    #[serde(default)]
+    pub dyn_def: Option<crate::DynDef>,
+    /// VNCCad: an anonymous block made from a dynamic block, with its property values.
+    #[serde(default)]
+    pub dyn_ref: Option<crate::DynRef>,
 }
 
 impl Block {
@@ -477,6 +483,8 @@ impl Block {
             xref_path: None,
             explodable: true,
             units: 0,
+            dyn_def: None,
+            dyn_ref: None,
         }
     }
 }

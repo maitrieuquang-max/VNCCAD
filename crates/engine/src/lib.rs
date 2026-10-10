@@ -341,6 +341,13 @@ pub struct Session {
     pub ui_requests: Vec<(String, serde_json::Value)>,
     /// VNCCad: AutoLISP variables, functions and loaded files.
     pub lisp: lisp::Lisp,
+    /// VNCCad: true while a reactor callback runs (its changes raise no further events).
+    pub in_reactor: bool,
+    /// VNCCad: the running LISP command, as reactors name it ("(C:XYZ)").
+    pub lisp_label: String,
+    /// VNCCad: binary support files given to the app (slides `.sld` for DCL images), by
+    /// lower-case file name.
+    pub binary_files: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl Default for Session {
@@ -374,6 +381,9 @@ impl Session {
             last_dim: None,
             ui_requests: Vec::new(),
             lisp: lisp::Lisp::default(),
+            in_reactor: false,
+            lisp_label: String::new(),
+            binary_files: Default::default(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -535,6 +545,9 @@ impl Session {
         let Some(spec) = find_command(&id) else {
             // VNCCad: a C: command defined in LISP.
             if self.lisp.has_command(&lower) {
+                let label = format!("(C:{})", lower.to_ascii_uppercase());
+                lisp::vlr::raise(self, lisp::vlr::Event::Lisp("vlr-lispWillStart", &label));
+                self.lisp_label = label;
                 return self.start_lisp(lisp::machine::Job::Call(lower));
             }
             return Err(EngineError::UnknownCommand(name.to_string()));
@@ -552,6 +565,12 @@ impl Session {
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
         self.last_command = Some(spec.id.to_string());
         self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+        let cmd_name = spec.id.to_ascii_uppercase();
+        lisp::vlr::raise(self, lisp::vlr::Event::Command("vlr-commandWillStart", &cmd_name));
+        if is_save(spec.id) {
+            let f = self.state().map(|st| st.title.clone()).unwrap_or_default();
+            lisp::vlr::raise(self, lisp::vlr::Event::Save("vlr-beginSave", &f));
+        }
         match spec.interactive {
             Some(factory) => {
                 let machine = factory(self)?;
@@ -566,7 +585,10 @@ impl Session {
                 Ok(())
             }
             None => {
-                let r = self.execute(spec.id, &Value::Null)?;
+                let before = self.state().ok().map(|st| st.doc.clone());
+                let r = self.execute(spec.id, &Value::Null);
+                self.after_command_events(spec.id, before.as_ref(), r.is_err(), false);
+                let r = r?;
                 if let Some(s) = r.as_str() {
                     self.echo(s.to_string());
                 } else if !r.is_null()
@@ -715,7 +737,16 @@ impl Session {
     fn finish(&mut self, run: Running, cancelled: bool) {
         self.pending_window = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
-        let _ = cancelled;
+        if run.id == "lisp" {
+            let label = std::mem::take(&mut self.lisp_label);
+            if !label.is_empty() {
+                let ev = if cancelled { "vlr-lispCancelled" } else { "vlr-lispEnded" };
+                lisp::vlr::raise(self, lisp::vlr::Event::Lisp(ev, &label));
+            }
+            lisp::vlr::raise_object_events(self, &run.before);
+        } else {
+            self.after_command_events(&run.id, Some(&run.before), false, cancelled);
+        }
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
         if let Ok(st) = self.state_mut()
@@ -726,6 +757,29 @@ impl Session {
             st.redo.clear();
             st.revision += 1;
         }
+    }
+
+    /// VNCCad: reactor events after a command (ended / cancelled / failed, saves, objects).
+    fn after_command_events(&mut self, id: &str, before: Option<&Arc<Drawing>>, failed: bool, cancelled: bool) {
+        if !lisp::vlr::any_active(self) {
+            return;
+        }
+        let name = id.to_ascii_uppercase();
+        let ev = if failed {
+            "vlr-commandFailed"
+        } else if cancelled {
+            "vlr-commandCancelled"
+        } else {
+            "vlr-commandEnded"
+        };
+        if !failed && !cancelled && is_save(id) {
+            let f = self.state().map(|st| st.title.clone()).unwrap_or_default();
+            lisp::vlr::raise(self, lisp::vlr::Event::Save("vlr-saveComplete", &f));
+        }
+        if let Some(b) = before {
+            lisp::vlr::raise_object_events(self, b);
+        }
+        lisp::vlr::raise(self, lisp::vlr::Event::Command(ev, &name));
     }
 
     /// Cancel the running command (Esc). With no command, clears the selection.
@@ -1074,3 +1128,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests;
+
+/// VNCCad: commands that save the drawing (for `:vlr-beginSave` / `:vlr-saveComplete`).
+fn is_save(id: &str) -> bool {
+    matches!(id, "save" | "qsave" | "saveas")
+}

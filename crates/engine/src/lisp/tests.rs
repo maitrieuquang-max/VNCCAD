@@ -286,3 +286,113 @@ fn dcl_dialog_round_trip() {
     s.input(crate::Input::Text(json!({"pressed":"cancel","values":{}}).to_string())).unwrap();
     assert_eq!(ev(&mut s, "ketqua"), "0");
 }
+
+#[test]
+fn reactors_follow_commands_and_objects() {
+    let mut s = Session::new();
+    let src = r#"
+(setq log nil)
+(defun ghi (r args) (setq log (cons (list (vlr-current-reaction-name) (car args)) log)))
+(setq rc (vlr-command-reactor "du lieu" '((:vlr-commandWillStart . ghi) (:vlr-commandEnded . ghi) (:vlr-commandCancelled . ghi))))
+(setq rl (vlr-lisp-reactor nil '((:vlr-lispEnded . ghi))))
+(defun c:noop () (princ))
+(defun suadoi (obj r p) (setq sua (cons (cdr (assoc 0 (entget obj))) sua)))
+(defun xoa (obj r p) (setq daxoa T))
+"#;
+    s.execute("appload", &json!({ "text": src, "name": "r.lsp" })).unwrap();
+    assert_eq!(ev(&mut s, "(vlr-data rc)"), "\"du lieu\"");
+    assert_eq!(ev(&mut s, "(vlr-type rc)"), ":VLR-COMMAND-REACTOR");
+    s.cmdline("LINE").unwrap();
+    s.cmdline("0,0").unwrap();
+    s.cmdline("10,0").unwrap();
+    s.cmdline("").unwrap();
+    assert_eq!(ev(&mut s, "(reverse log)"), "((:VLR-COMMANDWILLSTART \"LINE\") (:VLR-COMMANDENDED \"LINE\"))");
+    // An object reactor on the new line: MOVE modifies it, ERASE erases it.
+    ev(&mut s, "(setq ro (vlr-object-reactor (list (entlast)) nil '((:vlr-modified . suadoi) (:vlr-erased . xoa))))");
+    ev(&mut s, "(setq log nil)");
+    s.cmdline("NOOP").unwrap();
+    assert_eq!(ev(&mut s, "log"), "((:VLR-LISPENDED \"(C:NOOP)\"))");
+    let h = s.doc().unwrap().model.iter().last().unwrap().handle;
+    s.set_selection(vec![h]);
+    s.cmdline("MOVE").unwrap();
+    s.cmdline("0,0").unwrap();
+    s.cmdline("5,5").unwrap();
+    assert_eq!(ev(&mut s, "sua"), "(\"LINE\")");
+    // Removed reactors stay quiet.
+    ev(&mut s, "(vlr-remove rc)");
+    ev(&mut s, "(setq log nil)");
+    s.cmdline("REGEN").unwrap();
+    assert_eq!(ev(&mut s, "log"), "nil");
+    s.set_selection(vec![h]);
+    s.cmdline("ERASE").unwrap();
+    assert_eq!(ev(&mut s, "daxoa"), "T");
+    assert_eq!(ev(&mut s, "(length (vlr-reactors))"), "2");
+}
+
+/// A small AutoCAD slide (format level 2, little-endian): a square from four vectors, the last
+/// three as common-endpoint records, in colour 1, then a fill.
+fn sample_slide() -> Vec<u8> {
+    let mut b = b"AutoCAD Slide\r\n\x1a\0".to_vec();
+    b.push(0x56);
+    b.push(2);
+    b.extend_from_slice(&100u16.to_le_bytes());
+    b.extend_from_slice(&100u16.to_le_bytes());
+    b.extend_from_slice(&10_000_000u32.to_le_bytes());
+    b.extend_from_slice(&0u16.to_le_bytes());
+    b.extend_from_slice(&0x1234u16.to_le_bytes());
+    let w = |b: &mut Vec<u8>, v: u16| b.extend_from_slice(&v.to_le_bytes());
+    w(&mut b, 0xFF01); // colour 1
+    for v in [10u16, 10, 90, 10] {
+        w(&mut b, v); // vector (10,10)-(90,10)
+    }
+    // From the from-point (10,10): +80 up, then common-endpoint steps.
+    b.extend_from_slice(&[0, 0xFE, 80]); // dx 0, dy +80
+    b.extend_from_slice(&[80, 0xFE, 0]); // dx=80, dy=0
+    b.extend_from_slice(&[0, 0xFE, 0xB0]); // dx=0, dy=-80
+    w(&mut b, 0xFC00);
+    b
+}
+
+#[test]
+fn dcl_images_and_slides() {
+    let mut s = Session::new();
+    s.lisp.files.insert("anh.dcl".into(), "anh : dialog { : image { key = \"hinh\"; width = 20; height = 5; color = -2; } ok_only; }".into());
+    s.binary_files.insert("khung.sld".into(), sample_slide());
+    let src = r#"
+(defun c:anh (/ id)
+  (setq id (load_dialog "anh.dcl"))
+  (new_dialog "anh" id)
+  (setq w (dimx_tile "hinh") h (dimy_tile "hinh"))
+  (start_image "hinh")
+  (fill_image 0 0 w h -2)
+  (vector_image 0 0 w h 1)
+  (slide_image 0 0 w h "khung")
+  (end_image)
+  (start_dialog)
+  (princ))
+"#;
+    s.execute("appload", &json!({ "text": src, "name": "anh.lsp" })).unwrap();
+    s.cmdline("ANH").unwrap();
+    let d = s.current_prompt().and_then(|p| p.dialog).expect("dialog");
+    let ops = d.images.get("hinh").expect("image ops");
+    assert_eq!(ev(&mut s, "(list w h)"), "(150 75)");
+    assert!(matches!(ops.first(), Some(dcl::ImageOp::Fill { color: -2, .. })));
+    let lines: Vec<_> = ops
+        .iter()
+        .filter_map(|o| if let dcl::ImageOp::Line { x1, y1, x2, y2, color } = o { Some((*x1, *y1, *x2, *y2, *color)) } else { None })
+        .collect();
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    // The slide (100 × 100) fits the 150 × 75 tile at 0.75, centred, y down: its bottom edge
+    // (y = 10) lands at 75 − 7.5.
+    let (x1, y1, x2, y2, c) = lines[1];
+    assert_eq!(c, 1);
+    assert!(
+        (x1 - (37.5 + 7.5)).abs() < 1e-3 && (y1 - 67.5).abs() < 1e-3 && (x2 - (37.5 + 67.5)).abs() < 1e-3 && (y2 - 67.5).abs() < 1e-3,
+        "{:?}",
+        lines[1]
+    );
+    // Common-endpoint vectors start from the last from-point and close the square.
+    let last = lines[4];
+    assert!((last.2 - x2).abs() < 1e-3 && (last.3 - y2).abs() < 1e-3, "{lines:?}");
+    s.cancel();
+}

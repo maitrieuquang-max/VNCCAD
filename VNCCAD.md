@@ -51,7 +51,7 @@ Mục tiêu: một phần mềm CAD dùng được cho kỹ sư Việt Nam, ch�
 | Sửa block | `BEDIT` (`BE`: chọn block hoặc gõ tên), `REFEDIT` (chọn block), `BSAVE`, `BCLOSE` (Yes/No) | Block mở trong thẻ riêng, dùng mọi lệnh vẽ/sửa; BSAVE cập nhật mọi block cùng tên trong bản vẽ gốc (một bước Undo ở bản vẽ gốc) |
 | Script | `SCRIPT` hoặc kéo-thả `.scr` | Như AutoCAD: dấu cách/xuống dòng là Enter; dòng `(…)` chạy LISP |
 
-Giới hạn LISP: chưa có reactor (`vlr-*`) và đối tượng ActiveX ngoài phần đã liệt kê ở Giai đoạn 4; `entmake` hỗ trợ LINE, CIRCLE, ARC, POINT, LWPOLYLINE, TEXT, MTEXT, INSERT. Lệnh LISP được chạy lại từ đầu sau mỗi lần nhập (phát lại các câu trả lời trước) — với chương trình hỏi hàng trăm lần có thể chậm.
+Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Giai đoạn 4–5 chưa có; `entmake` hỗ trợ LINE, CIRCLE, ARC, POINT, LWPOLYLINE, TEXT, MTEXT, INSERT. Lệnh LISP được chạy lại từ đầu sau mỗi lần nhập (phát lại các câu trả lời trước) — với chương trình hỏi hàng trăm lần có thể chậm.
 
 ### Giai đoạn 4 – in hàng loạt, Visual LISP, DCL
 
@@ -59,13 +59,21 @@ Giới hạn LISP: chưa có reactor (`vlr-*`) và đối tượng ActiveX ngoà
 |---|---|---|
 | In hàng loạt | `PUBLISH` (`INHANGLOAT`, `BATCHPLOT`): mọi layout, hoặc tự tìm khung tên (block chèn nhiều lần, lớn nhất) trong Model → một file PDF nhiều trang | Thứ tự trang trái→phải, trên→dưới; khổ mặc định A3 cho khung tên, chọn được khổ/bảng nét. `publish.sheets` xem trước danh sách tờ |
 | Ảnh/PDF nền khi in | `PLOT`, `PLOTWINDOW`, `EXPORTPDF`, `PUBLISH` | Ảnh nhúng vào PDF (giữ trong suốt), nằm dưới nét vẽ, cắt theo viewport |
-| Phiên bản DWG khi lưu | `DWGVERSION 2000/2004/2007/2010/2013/2018` hoặc `SAVEAS` với `version` | Mặc định AutoCAD 2007 (AC1021). Đã kiểm tra lưu-mở lại đủ chữ Việt và chữ Trung ở mọi phiên bản |
+| Phiên bản DWG khi lưu | `DWGVERSION 2000/2004/2007/2010/2013/2018` hoặc `SAVEAS` với `version` | Mặc định AutoCAD 2007 (AC1021), mở được bằng AutoCAD 2007 trở lên. Đã kiểm tra lưu-mở lại đủ chữ Việt, chữ Trung và ô gộp của bảng ở mọi phiên bản |
 | Xref lồng nhau | `XATTACH`, `XREF reload` | Theo xref bên trong xref tới 8 cấp, chặn vòng lặp; layer phụ thuộc giữ tên `A\|B\|LAYER` |
 | Bảng nét in theo tên (STB) | `PLOTSTYLE <file>.stb`; kéo-thả `.stb`; layer có thuộc tính `plotStyle` | Đọc kiểu in gán cho layer trong DXF/DWG (ACAD_PLOTSTYLENAME) và ghi lại khi lưu |
 | Kích thước annotative từ file | `CANNOSCALE` | Kích thước annotative đọc từ file được dựng lại theo tỷ lệ chú thích (không còn cố định theo block `*D`) |
-| Chữ Trung/Nhật/Hàn trên web | `CJKFONT` | Trình duyệt Chrome/Edge: lấy font CJK của máy (SimSun, Microsoft YaHei…) sau khi bạn cho phép; trình duyệt khác: kéo-thả file font. Khi mở bản vẽ có chữ CJK mà thiếu font, dòng lệnh sẽ nhắc |
+| Chữ Trung/Nhật/Hàn trên web | `CJKFONT` | Chrome/Edge: lấy font CJK của máy (SimSun, Microsoft YaHei…) sau khi bạn cho phép. Không có font máy (hoặc trình duyệt khác): tải một lần font mã nguồn mở ArchLang CJK Sans (SIL OFL, ~11 MB, chữ Trung giản thể/phồn thể, kana Nhật, Hangul Hàn) từ CDN jsDelivr/unpkg, lưu trong bộ nhớ trình duyệt để lần sau và khi offline tự dùng. Khi mở bản vẽ có chữ CJK mà thiếu font, dòng lệnh sẽ nhắc |
 | Visual LISP | `vlax-curve-*` (getStartParam/EndParam, getStartPoint/EndPoint, getDistAtParam, getParamAtDist, getPointAtDist/Param, getClosestPointTo, getFirstDeriv, getArea, isClosed…), `vla-get-*/vla-put-*`, `vlax-get-property/put-property`, `vlax-ename->vla-object`, `vlax-3d-point`, `vla-AddLine/AddCircle/AddText/AddLightWeightPolyline`, `vla-delete` | Dùng được cho line, arc, circle, polyline (tham số = chỉ số đỉnh như AutoCAD), spline/ellipse (theo xấp xỉ). Thường dùng để rải cọc, cắm cọc theo tuyến |
-| Hộp thoại DCL | `load_dialog`, `new_dialog`, `set_tile/get_tile/get_attr`, `action_tile`, `mode_tile`, `start_list/add_list/end_list`, `start_dialog/done_dialog/term_dialog/unload_dialog`; nạp `.dcl` bằng kéo-thả hoặc mở file (bản desktop đọc được cả đường dẫn ghi trong `load_dialog`) | Hiện: dialog, row/column (boxed), edit_box, popup_list, list_box, toggle, radio_button, button, text, slider, ok_cancel… Tile có `action_tile` chạy ngay khi đổi giá trị, hộp thoại giữ nguyên tới `done_dialog`. Ảnh trong hộp thoại (`slide_image`, `vector_image`) chưa vẽ |
+| Hộp thoại DCL | `load_dialog`, `new_dialog`, `set_tile/get_tile/get_attr`, `action_tile`, `mode_tile`, `start_list/add_list/end_list`, `start_dialog/done_dialog/term_dialog/unload_dialog`; nạp `.dcl` bằng kéo-thả hoặc mở file (bản desktop đọc được cả đường dẫn ghi trong `load_dialog`) | Hiện: dialog, row/column (boxed), edit_box, popup_list, list_box, toggle, radio_button, button, text, slider, ok_cancel… Tile có `action_tile` chạy ngay khi đổi giá trị, hộp thoại giữ nguyên tới `done_dialog`. Ô ảnh `image`/`image_button`: `start_image`, `fill_image`, `vector_image`, `slide_image` (đọc slide `.sld` — kéo-thả hoặc mở file; thư viện `.slb` chưa đọc), `dimx_tile/dimy_tile`; bấm `image_button` trả `$x $y` |
+
+### Giai đoạn 5 – reactor, block động, kiểm thử trình duyệt
+
+| Hạng mục | Lệnh / cách dùng | Ghi chú |
+|---|---|---|
+| Reactor AutoLISP | `vlr-command-reactor`, `vlr-lisp-reactor`, `vlr-editor-reactor`, `vlr-dwg-reactor`, `vlr-object-reactor`; `vlr-remove/add/added-p/remove-all/reactors/type/data/data-set/reactions/reaction-set/owners/owner-add/owner-remove/current-reaction-name` | Sự kiện: `:vlr-commandWillStart/Ended/Cancelled/Failed`, `:vlr-lispWillStart/Ended/Cancelled`, `:vlr-beginSave/saveComplete`, `:vlr-modified/erased` (đối tượng). Callback chạy sau lệnh, cùng bước Undo với lệnh, không được hỏi người dùng. Reactor không lưu vào file (`vlr-pers` được chấp nhận, không có tác dụng) |
+| Block động | `DYNPROP` (`THUOCTINHDONG`): chọn block → đổi thuộc tính; bảng Properties có nhóm "Dynamic block" khi chọn một block động | Đọc từ file AutoCAD: tham số Linear với hành động Stretch / Move / Array, tham số Flip, tham số Visibility (trạng thái hiển thị). Đổi thuộc tính tạo block `*U` mới như AutoCAD. Đã đối chiếu với bản vẽ thật: dựng lại 8 block động (kéo giãn 1.825–6.000) có khung bao trùng khớp với hình AutoCAD đã lưu; riêng các bản lặp của hành động Array bị thiếu vì bộ đọc DWG làm mất danh sách đối tượng của hành động này |
+| Kiểm thử bản web trong trình duyệt thật | Mở trang với `?selftest` (CI chạy tự động bằng Chromium) | Mở DWG có chữ Việt + Trung và DWG 60.000 đối tượng theo đúng đường người dùng mở file, chạy LISP, lấy font CJK; đo thời gian luồng chính bị chiếm để phát hiện treo trang |
 
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
@@ -86,12 +94,10 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 
 ### Giới hạn hiện tại
 
-- DWG trên bản web: đã bật đọc/ghi (cùng bộ đọc với bản desktop) nhưng chưa được thử trên trình duyệt thật; nếu trang báo lỗi với một file DWG, mở bằng bản desktop rồi lưu DXF. Bản vẽ rất lớn trên web có thể chậm hơn desktop.
-- Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần.
+- Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần. Bản vẽ rất lớn trên web chậm hơn desktop.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
-- Bản web: lấy font CJK của máy chỉ có trên Chrome/Edge (API Local Font Access); các trình duyệt khác cần kéo-thả file font.
-- AutoLISP chưa có reactor (`vlr-*`); hộp thoại DCL chưa vẽ ảnh (`slide_image`, `vector_image`).
-- Lưu DWG từ AutoCAD 2010 trở lên làm mất ô gộp của bảng (TABLE) — vì thế mặc định lưu bản 2007.
+- Block động: lưu file từ VNCCad giữ thuộc tính động cho VNCCad (bản ghi riêng), nhưng AutoCAD mở lại sẽ thấy block thường (các đối tượng tham số/hành động của AutoCAD không được ghi lại). Các tham số khác (Point, Polar, XY, Rotation, Lookup, Alignment) chưa hỗ trợ. Hành động Array trong file DWG có thể mất danh sách đối tượng khi đọc (giới hạn của bộ đọc DWG).
+- Reactor LISP không lưu cùng bản vẽ; chưa có `vlr-mouse-reactor`, `vlr-sysvar-reactor` (tạo được nhưng không phát sự kiện).
 
 ## Build
 
@@ -136,4 +142,4 @@ Sau khi mở trang lần đầu, Chrome/Edge sẽ hiện nút **Cài đặt** tr
 ## Lộ trình tiếp theo
 
 - **Giai đoạn 2:** VN2000/UTM, nhập/xuất KML, nền bản đồ vệ tinh, đường đồng mức (chuyển từ DXF Toolkit), giao diện tiếng Việt.
-- **Tiếp theo:** dynamic block (tham số, hành động), reactor AutoLISP, sheet set.
+- **Tiếp theo:** các tham số block động còn lại (Point, Polar, XY, Rotation, Lookup), ghi block động theo định dạng AutoCAD, sheet set.

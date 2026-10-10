@@ -546,6 +546,10 @@ struct Rx {
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// VNCCad: BLOCK_RECORD extension dictionary handle → block name (dynamic blocks).
+    br_xdict: HashMap<String, String>,
+    /// VNCCad: INSERT extension dictionary handle and the block it inserts.
+    insert_xdict: Vec<(String, String)>,
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -617,6 +621,11 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                 kindent = Some((c, k));
             }
             "INSERT" => {
+                if let (Some(x), Some(b)) = (crate::dxf_dyn::xdict(tags), t.s(2))
+                    && rx.insert_xdict.len() < 1_000_000
+                {
+                    rx.insert_xdict.push((x, b));
+                }
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
                     while let Some((k2, t2)) = recs.get(i) {
@@ -717,6 +726,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 rx.styles.insert(h.trim().to_ascii_uppercase(), n);
             }
             "BLOCK_RECORD" => {
+                if let Some(x) = crate::dxf_dyn::xdict(tg) {
+                    rx.br_xdict.insert(x, n.clone());
+                }
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
@@ -1031,12 +1043,15 @@ struct Objects {
     groups: Vec<(String, Vec<Tag>)>,
     /// IMAGEDEF handle (upper case) → image file path.
     imagedefs: HashMap<String, String>,
+    /// VNCCad: dynamic block objects.
+    dynamic: crate::dxf_dyn::DynObjects,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
 
 impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
+        self.dynamic.add(kind, tags);
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
             "IMAGEDEF" => {
@@ -1152,6 +1167,19 @@ impl Objects {
         // Standard associativity, for dimensions without CADCraft's exact links.
         for tags in &self.dimassocs {
             dimassoc(d, tags);
+        }
+        // VNCCad: dynamic blocks (AutoCAD's objects; VNCCad's own record, read after, wins).
+        crate::dxf_dyn::apply(d, &self.dynamic, &self.xrecords, &rx.br_xdict, &rx.brs, &rx.insert_xdict);
+        let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::DYN_KEY).map(|(h, _)| h.clone());
+        if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
+            let mut text = String::new();
+            for t in tags.iter().filter(|t| t.code == 1 || t.code == 3) {
+                if text.len() > crate::dxf_ext::MAX_PAYLOAD {
+                    break;
+                }
+                text.push_str(&t.str());
+            }
+            crate::dxf_ext::apply_dyn(d, &text);
         }
     }
 }

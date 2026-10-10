@@ -588,6 +588,7 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<Value> = None;
+    let mut dyn_set: Option<(String, String, Value)> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -810,11 +811,50 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
                 num(ui, "Rotation", "rotation", i.rotation.to_degrees(), &mut set, &ids);
                 num(ui, "Scale", "scale", i.scale.x, &mut set, &ids);
+                // VNCCad: dynamic block properties.
+                let handle = e.handle.hex();
+                if let Ok(list) = app.session.execute("dynprop.list", &json!({ "handle": handle })) {
+                    group(ui, "Dynamic block");
+                    prop_row(ui, "Definition", |ui| {
+                        value_box(ui, list["block"].as_str().unwrap_or(""), false, true);
+                    });
+                    for pr in list["properties"].as_array().cloned().unwrap_or_default() {
+                        let name = pr["name"].as_str().unwrap_or("").to_string();
+                        let value = pr["value"].as_str().unwrap_or("").to_string();
+                        prop_row(ui, &name, |ui| match pr["kind"].as_str() {
+                            Some("visibility") => {
+                                ui.menu_button(value.clone(), |ui| {
+                                    for st in pr["states"].as_array().cloned().unwrap_or_default() {
+                                        let st = st.as_str().unwrap_or("").to_string();
+                                        if ui.button(&st).clicked() {
+                                            dyn_set = Some((handle.clone(), name.clone(), json!(st)));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            Some("flip") => {
+                                let mut on = value == "Lật";
+                                if ui.checkbox(&mut on, "").changed() {
+                                    dyn_set = Some((handle.clone(), name.clone(), json!(on)));
+                                }
+                            }
+                            _ => {
+                                if let Some(v) = edit_field(ui, ui.id().with(("dyn", &handle, &name)), value.clone()) {
+                                    dyn_set = Some((handle.clone(), name.clone(), json!(v)));
+                                }
+                            }
+                        });
+                    }
+                }
             }
             _ => {}
         }
     }
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
+    }
+    if let Some((h, name, value)) = dyn_set {
+        let _ = app.run("dynprop", json!({ "handle": h, "name": name, "value": value }));
     }
 }
