@@ -431,6 +431,7 @@ fn add_viewports(s: &mut Session, space: &Space, rect: Bounds2, count: usize, ar
             locked: false,
             frozen_layers: vp_frozen.clone(),
             layer_colors: Vec::new(),
+            clip: None,
         };
         out.push(d.add(space, common.clone(), EntityKind::Viewport(vp))?);
     }

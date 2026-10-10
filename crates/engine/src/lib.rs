@@ -352,6 +352,11 @@ pub struct Session {
     pub clock: Option<fn() -> f64>,
     /// VNCCad: RECOVER from the UI: audit and fix the next drawing opened.
     pub audit_next_open: bool,
+    /// VNCCad: "Insert > Block from File" from the UI: the next drawing opened becomes a block
+    /// of the active drawing and INSERT starts.
+    pub insert_next_open: bool,
+    /// VNCCad: the drawing the clipboard objects came from (blocks, layers, styles to bring along).
+    pub clipboard_doc: Option<Arc<Drawing>>,
 }
 
 impl Default for Session {
@@ -390,6 +395,8 @@ impl Session {
             binary_files: Default::default(),
             clock: default_clock(),
             audit_next_open: false,
+            insert_next_open: false,
+            clipboard_doc: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

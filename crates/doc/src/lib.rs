@@ -10,6 +10,7 @@ mod constraint;
 mod dynblock;
 mod entity;
 mod extents;
+pub mod formula;
 mod header;
 pub mod library;
 mod store;

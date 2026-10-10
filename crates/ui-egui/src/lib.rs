@@ -242,7 +242,7 @@ impl CadApp {
         } else if font {
             // The interface picks up CJK letters from the new font too.
             self.styled = false;
-        } else if !support {
+        } else if !support && self.session.running.is_none() {
             self.ui.start_tab = false;
             self.canvas.zoom_pending = true;
             self.hint_missing_cjk();
@@ -257,7 +257,8 @@ impl CadApp {
             let lower = path.to_ascii_lowercase();
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
             let support = [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
-            if !support {
+            // A drawing inserted as a block (INSERT running) keeps the view.
+            if !support && self.session.running.is_none() {
                 self.ui.start_tab = false;
                 self.canvas.zoom_pending = true;
             }

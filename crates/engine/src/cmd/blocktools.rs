@@ -17,6 +17,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?, boundary?: [[x,y]…] (2 corners or a polygon, drawing coordinates) | polyline?: hex | delete?: true}")
             .interactive(|_| Ok(Box::new(Flow::new("xclip", plan_xclip, flow_xclip))))
             .enabled(has_doc),
+        CommandSpec::new("vpclip", "Clip Viewport", run_vpclip)
+            .menu(&["Modify", "Clip", "Viewport"])
+            .alias(&["catvp"])
+            .params("{handle: viewport, boundary?: [[x,y]…] (paper space) | polyline?: hex | delete?: true}")
+            .interactive(|_| Ok(Box::new(Flow::new("vpclip", plan_vpclip, flow_vpclip))))
+            .enabled(has_doc),
         CommandSpec::new("attsync", "Synchronize Attributes", run_attsync)
             .menu(&["Modify", "Object", "Attribute", "Synchronize"])
             .alias(&["dongbothuoctinh"])
@@ -117,6 +123,62 @@ fn flow_xclip(s: &mut Session, a: &[Ans]) -> Result<Value> {
         }
     };
     Ok(json!({ "message": format!("Đã cập nhật đường cắt của {n} block.") }))
+}
+
+/// Give a viewport a polygonal boundary (or the rectangle back with `None`).
+fn vpclip(s: &mut Session, h: Handle, boundary: Option<Vec<Vec2>>) -> Result<()> {
+    if boundary.as_ref().is_some_and(|b| b.len() < 3) {
+        return Err(bad("vpclip", "khung cần ít nhất 3 điểm"));
+    }
+    let d = s.doc_mut()?;
+    if !d.entity(h).is_some_and(|e| matches!(e.kind, EntityKind::Viewport(_))) {
+        return Err(bad("vpclip", "không phải viewport"));
+    }
+    d.modify_entity(h, |e| {
+        if let EntityKind::Viewport(v) = &mut e.kind {
+            v.clip = boundary;
+        }
+    })?;
+    Ok(())
+}
+
+fn run_vpclip(s: &mut Session, p: &Value) -> Result<Value> {
+    let h = targets(s, p)?.first().copied().ok_or_else(|| bad("vpclip", "`handle` of a viewport is required"))?;
+    if bool_or(p, "delete", false) {
+        vpclip(s, h, None)?;
+        return Ok(json!({ "clipped": false }));
+    }
+    let b = match (points_param(p, "boundary"), p.get("polyline").and_then(Value::as_str).and_then(Handle::parse_hex)) {
+        (Some(b), _) => b,
+        (None, Some(pl)) => {
+            let b = polyline_points(s, pl).ok_or_else(|| bad("vpclip", "`polyline` phải là polyline hoặc đường tròn"))?;
+            s.doc_mut()?.remove_entity(pl);
+            b
+        }
+        _ => return Err(bad("vpclip", "`boundary`, `polyline` or `delete` is required")),
+    };
+    vpclip(s, h, Some(b))?;
+    Ok(json!({ "clipped": true }))
+}
+
+fn plan_vpclip(_s: &Session, a: &[Ans]) -> Option<Ask> {
+    match a.len() {
+        0 => Some(Ask::One("Chọn viewport".into())),
+        1 => Some(Ask::Kw { msg: "Khung cắt".into(), kws: vec!["Object", "Delete"], default: Some("Object") }),
+        2 if a.get(1).map(Ans::text) == Some("Object") => Some(Ask::One("Chọn polyline kín hoặc đường tròn làm khung".into())),
+        _ => None,
+    }
+}
+
+fn flow_vpclip(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let Some(vp) = a.first().map(Ans::sel).and_then(|v| v.first().copied()) else { return Ok(Value::Null) };
+    if a.get(1).map(Ans::text) == Some("Delete") {
+        vpclip(s, vp, None)?;
+        return Ok(json!({ "message": "Viewport trở lại hình chữ nhật." }));
+    }
+    let pl = a.get(2).map(Ans::sel).and_then(|v| v.first().copied()).ok_or_else(|| bad("vpclip", "chọn khung"))?;
+    run_vpclip(s, &json!({ "handle": vp.hex(), "polyline": pl.hex() }))?;
+    Ok(json!({ "message": "Đã cắt viewport theo khung." }))
 }
 
 /// Rebuild the attributes of every reference of `block` from its attribute definitions.
@@ -235,5 +297,37 @@ mod tests {
         let EntityKind::Insert(i) = &s.doc().unwrap().entity(ins).unwrap().kind else { panic!() };
         assert_eq!(i.attribs.len(), 1);
         assert!((i.attribs[0].text.insert.y - 97.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vpclip_cuts_the_view_and_survives_dxf() {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [100, 0]] })).unwrap();
+        s.execute("layout.new", &json!({ "name": "L1" })).ok();
+        s.execute("layout.set", &json!({ "name": "L1" })).unwrap();
+        let space = cadcraft_doc::Space::Paper("L1".into());
+        let vp = cadcraft_doc::Viewport {
+            center: cadcraft_geom::Vec3::new(50.0, 0.0, 0.0),
+            width: 100.0,
+            height: 40.0,
+            view_center: Vec2::new(50.0, 0.0),
+            view_height: 40.0,
+            id: 2,
+            locked: false,
+            frozen_layers: Vec::new(),
+            layer_colors: Vec::new(),
+            clip: None,
+        };
+        let h = s.doc_mut().unwrap().add(&space, Default::default(), EntityKind::Viewport(vp)).unwrap();
+        s.execute("vpclip", &json!({ "handle": h.hex(), "boundary": [[10, -10], [40, -10], [40, 10], [10, 10]] })).unwrap();
+        let l = cadcraft_render::build(s.doc().unwrap(), &space, &cadcraft_render::Options::default());
+        let model: Vec<Vec<Vec2>> =
+            l.prims.iter().filter(|p| p.handle != h && p.kind == cadcraft_render::Kind::Polyline).map(|p| l.points(p).to_vec()).collect();
+        assert!(model.iter().any(|p| p.len() == 2 && p[0].near(Vec2::new(10.0, 0.0), 1e-6) && p[1].near(Vec2::new(40.0, 0.0), 1e-6)), "{model:?}");
+        let d = s.doc().unwrap().clone();
+        let back = cadcraft_io::read(&cadcraft_io::write(&d, "v.dxf").unwrap(), "v.dxf").unwrap();
+        let EntityKind::Viewport(v) = &back.entity(h).unwrap().kind else { panic!() };
+        assert_eq!(v.clip.as_ref().map(Vec::len), Some(4));
+        assert_eq!(back.layout("L1").unwrap().entities.len(), d.layout("L1").unwrap().entities.len(), "the boundary polyline is not duplicated");
     }
 }

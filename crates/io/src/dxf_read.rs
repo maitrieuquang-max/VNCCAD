@@ -291,6 +291,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
         }),
         "WIPEOUT" => {
             let o = t.p(10);
@@ -393,6 +394,25 @@ fn acad_table(tags: &[Tag]) -> Table {
         // Other writers: a first row merged across every column reads as a title.
         None => (cols > 1 && cells.first().and_then(|r| r.first()).and_then(|c| c.merged) == Some((1, cols as u32)), false, 0.18, "Standard".into()),
     };
+    // VNCCad: formulas (the cells hold their values).
+    let mut cells = cells;
+    let f = crate::dxf_ext::xdata_list(x, "FORMULAS");
+    let mut k = 0;
+    while k + 2 < f.len() + 1 {
+        let (Some(r), Some(c), Some(text)) = (f.get(k), f.get(k + 1), f.get(k + 2)) else { break };
+        if r.code == 1071 && c.code == 1071 && text.code == 1000 {
+            if let Some(cell) = usize::try_from(r.i64())
+                .ok()
+                .and_then(|r| cells.get_mut(r))
+                .and_then(|row| usize::try_from(c.i64()).ok().and_then(|c| row.get_mut(c)))
+            {
+                cell.text = text.str();
+            }
+            k += 3;
+        } else {
+            k += 1;
+        }
+    }
     Table { insert: T(tags).p(10), col_widths, row_heights, cells, style, text_height, title, header }
 }
 
@@ -549,6 +569,8 @@ struct Rx {
     table_style_fix: Vec<(Handle, String)>,
     /// VNCCad: BLOCK_RECORD extension dictionary handle → block name (dynamic blocks).
     br_xdict: HashMap<String, String>,
+    /// VNCCad: VIEWPORT with non-rectangular clipping → the boundary entity's handle.
+    vp_clips: Vec<(Handle, Handle)>,
     /// VNCCad: INSERT extension dictionary handle and the block it inserts.
     insert_xdict: Vec<(String, String, Handle)>,
 }
@@ -560,6 +582,21 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs);
             dm.assoc = crate::dxf_ext::read_assoc(tags);
+            // VNCCad: DIMBREAK gaps.
+            let br = crate::dxf_ext::xdata_list(crate::dxf_ext::xdata(tags, crate::dxf_ext::APP), "BREAKS");
+            if !br.is_empty() {
+                let xs: Vec<f64> = br.iter().filter(|t| t.code == 1010).map(Tag::f64).collect();
+                let ys: Vec<f64> = br.iter().filter(|t| t.code == 1020).map(Tag::f64).collect();
+                let ss: Vec<f64> = br.iter().filter(|t| t.code == 1040).map(Tag::f64).collect();
+                let pts: Vec<serde_json::Value> = xs
+                    .iter()
+                    .zip(&ys)
+                    .enumerate()
+                    .take(10_000)
+                    .map(|(i, (x, y))| serde_json::json!([x, y, ss.get(i).copied().unwrap_or(0.0)]))
+                    .collect();
+                dm.overrides.insert("vnccadBreaks".into(), serde_json::Value::Array(pts));
+            }
             // VNCCad: jogged radius.
             let jog = crate::dxf_ext::xdata_list(crate::dxf_ext::xdata(tags, crate::dxf_ext::APP), "JOG");
             if matches!(dm.kind, DimKind::Radius) && !jog.is_empty() {
@@ -567,6 +604,15 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
                 dm.kind = DimKind::Jogged;
                 dm.p13 = Vec3::new(f(1010), f(1020), f(1030));
                 dm.p14 = Vec3::new(f(1011), f(1021), f(1031));
+            }
+        }
+        ("VIEWPORT", EntityKind::Viewport(_)) => {
+            let t = T(tags);
+            if t.i(90).unwrap_or(0) & 0x10000 != 0
+                && let Some(c) = t.s(340).and_then(|x| Handle::parse_hex(&x))
+                && c.0 != 0
+            {
+                rx.vp_clips.push((h, c));
             }
         }
         ("ACAD_TABLE", EntityKind::Table(_)) => {
@@ -1180,6 +1226,32 @@ impl Objects {
         // VNCCad: dynamic blocks (AutoCAD's objects; VNCCad's own record, read after, wins).
         crate::dxf_dyn::apply(d, &self.dynamic, &self.xrecords, &rx.br_xdict, &rx.brs, &rx.insert_xdict);
         crate::dxf_dyn::apply_clips(d, &self.dynamic, &rx.insert_xdict);
+        // VNCCad: non-rectangular viewports take their boundary from the clip entity, which
+        // VNCCad writes back when saving.
+        for (vp, c) in &rx.vp_clips {
+            let pts: Option<Vec<cadcraft_geom::Vec2>> = d.entity(*c).and_then(|e| match &e.kind {
+                EntityKind::LwPolyline(p) => Some(p.vertices.iter().map(|v| v.p).collect()),
+                EntityKind::Polyline3d(p) => Some(p.points.iter().map(|v| v.xy()).collect()),
+                EntityKind::Circle(ci) => Some(
+                    (0..96)
+                        .map(|k| ci.center.xy() + cadcraft_geom::Vec2::from_angle(f64::from(k) * std::f64::consts::TAU / 96.0) * ci.radius)
+                        .collect(),
+                ),
+                _ => None,
+            });
+            if let Some(pts) = pts.filter(|p| p.len() >= 3) {
+                let ok = d
+                    .modify_entity(*vp, |e| {
+                        if let EntityKind::Viewport(v) = &mut e.kind {
+                            v.clip = Some(pts);
+                        }
+                    })
+                    .is_ok();
+                if ok {
+                    d.remove_entity(*c);
+                }
+            }
+        }
         let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::DYN_KEY).map(|(h, _)| h.clone());
         if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
             let mut text = String::new();

@@ -481,6 +481,9 @@ pub struct Viewport {
     /// Per-viewport layer colour overrides (VP Color in the Layer Properties Manager).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_colors: Vec<(String, Color)>,
+    /// VNCCad: a non-rectangular viewport (VPCLIP): its boundary in paper space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<Vec<Vec2>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -696,6 +699,10 @@ impl EntityKind {
                 pts.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(*w.first()?, *w.get(1)?))))).collect()
             }
             EntityKind::Viewport(v) => {
+                if let Some(poly) = v.clip.as_ref().filter(|p| p.len() >= 3) {
+                    let n = poly.len();
+                    return (0..n).filter_map(|i| Some(Prim::Seg(Segment::Line(GLine::new(*poly.get(i)?, *poly.get((i + 1) % n)?))))).collect();
+                }
                 let c = v.center.xy();
                 let h = Vec2::new(v.width / 2.0, v.height / 2.0);
                 let b = Bounds2::new(c - h, c + h).corners();
@@ -858,6 +865,9 @@ impl EntityKind {
                 t3(&mut v.center);
                 v.width *= s;
                 v.height *= s;
+                if let Some(c) = v.clip.as_mut() {
+                    c.iter_mut().for_each(|p| *p = m.apply(*p));
+                }
             }
             EntityKind::Image(i) => {
                 t3(&mut i.insert);

@@ -191,7 +191,8 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
         w.s(1002, "}");
     }
     let jog = matches!(dm.kind, DimKind::Jogged);
-    if !dm.assoc.is_empty() || jog {
+    let breaks = cadcraft_render::dim_breaks(dm);
+    if !dm.assoc.is_empty() || jog || !breaks.is_empty() {
         w.s(1001, dxf_ext::APP);
         if !dm.assoc.is_empty() {
             w.xdata(dxf_ext::assoc_xdata(&dm.assoc));
@@ -209,6 +210,17 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
                 Tag::f(1031, dm.p14.z),
                 Tag::s(1002, "}"),
             ]);
+        }
+        if !breaks.is_empty() {
+            let mut v = vec![Tag::s(1000, "BREAKS"), Tag::s(1002, "{")];
+            for (p, size) in breaks {
+                v.push(Tag::f(1010, p.x));
+                v.push(Tag::f(1020, p.y));
+                v.push(Tag::f(1030, 0.0));
+                v.push(Tag::f(1040, size));
+            }
+            v.push(Tag::s(1002, "}"));
+            w.xdata(v);
         }
     }
 }
@@ -684,7 +696,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.i(178, 0);
                     w.f(145, 0.0);
                     // Long text: 250-character code-2 chunks, the rest in code 1.
-                    let chars: Vec<char> = cell.map(|x| x.text.chars().collect()).unwrap_or_default();
+                    // VNCCad: a formula cell is written with its value (the formula goes in xdata).
+                    let shown = match cell {
+                        Some(x) if x.text.trim_start().starts_with('=') => t.display_text(r, c),
+                        Some(x) => x.text.clone(),
+                        None => String::new(),
+                    };
+                    let chars: Vec<char> = shown.chars().collect();
                     let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();
                     let n = chunks.len();
                     for (i, ch) in chunks.into_iter().enumerate() {
@@ -701,6 +719,24 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(1070, i64::from(t.header));
             w.f(1040, t.text_height);
             w.s(1000, &t.style);
+            let formulas: Vec<(usize, usize, &str)> = t
+                .cells
+                .iter()
+                .enumerate()
+                .flat_map(|(r, row)| {
+                    row.iter().enumerate().filter(|(_, x)| x.text.trim_start().starts_with('=')).map(move |(c, x)| (r, c, x.text.as_str()))
+                })
+                .collect();
+            if !formulas.is_empty() {
+                w.s(1000, "FORMULAS");
+                w.s(1002, "{");
+                for (r, c, f) in formulas {
+                    w.i(1071, r as i64);
+                    w.i(1071, c as i64);
+                    w.s(1000, f);
+                }
+                w.s(1002, "}");
+            }
         }
         EntityKind::MLeader(m) => {
             // Written as plain LEADER + MTEXT entities (MULTILEADER objects aren't supported
@@ -811,8 +847,29 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(69, i64::from(v.id));
             w.p2(12, v.view_center);
             w.f(45, v.view_height);
-            // Status flags: 16384 = display locked.
-            w.i(90, if v.locked { 16384 } else { 0 });
+            // Status flags: 16384 = display locked; 0x10000 = non-rectangular clipping.
+            let clip = v.clip.as_ref().filter(|c| c.len() >= 3);
+            let clip_h = clip.map(|_| w.h());
+            w.i(90, i64::from(if v.locked { 16384 } else { 0 }) | if clip.is_some() { 0x10000 } else { 0 });
+            // VNCCad: the boundary is an LWPOLYLINE the viewport points at (as AutoCAD writes it).
+            if let (Some(c), Some(h)) = (clip, clip_h) {
+                w.s(340, h.clone());
+                w.s(0, "LWPOLYLINE");
+                w.s(5, h);
+                w.s(330, owner);
+                w.s(100, "AcDbEntity");
+                if paper {
+                    w.i(67, 1);
+                }
+                w.s(8, &e.common.layer);
+                w.s(100, "AcDbPolyline");
+                w.i(90, c.len() as i64);
+                w.i(70, 1);
+                for p in c {
+                    w.f(10, p.x);
+                    w.f(20, p.y);
+                }
+            }
         }
         // Not yet written: images, wipeouts, tables, multileaders, unknown objects.
         EntityKind::Image(im) if cx.pdfs.contains_key(&e.handle) => {
@@ -962,7 +1019,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     attach,
                     rotation: 0.0,
                     style: "Standard".into(),
-                    contents: cell.text.clone(),
+                    contents: if cell.text.trim_start().starts_with('=') { t.display_text(r, col) } else { cell.text.clone() },
                     line_spacing: 1.0,
                 }),
             });

@@ -80,6 +80,18 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     };
     let no_path = params.is_null() || (params.get("path").is_none() && params.get("data").is_none());
     let r = match id {
+        "blockfromfile" if no_path => {
+            app.session.insert_next_open = true;
+            if let Some(req) = app.services.request_open.as_ref() {
+                req();
+                return Some(Ok(Value::Null));
+            }
+            match app.services.pick_open.as_ref().and_then(|f| f()) {
+                Some(p) => app.open_path(&p),
+                None => app.session.insert_next_open = false,
+            }
+            Ok(Value::Null)
+        }
         "recover" if no_path => {
             app.session.audit_next_open = true;
             if let Some(req) = app.services.request_open.as_ref() {

@@ -352,6 +352,7 @@ fn chspace_json_and_command_line() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
     };
     s.doc_mut().unwrap().add(&Space::Paper("Layout1".into()), Default::default(), EntityKind::Viewport(vp)).unwrap();
     let r = s.execute("chspace", &json!({"handles": [l]})).unwrap();

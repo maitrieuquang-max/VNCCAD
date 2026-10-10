@@ -309,6 +309,13 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         entity(&mut sub, &top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors), me);
     }
     clip::apply_masks(&mut sub.list, &sub.masks);
+    // VNCCad: a non-rectangular viewport shows only what lies inside its boundary.
+    if let Some(poly) = vp.clip.as_ref().filter(|p| p.len() >= 3) {
+        clip::clip_list_to_polygon(&mut sub.list, 0, poly);
+        let r = Bounds2::from_points(poly.iter().copied());
+        append_clipped(&mut b.list, &sub.list, &r.expand(r.width().max(r.height()) * 1e-9));
+        return;
+    }
     append_clipped(&mut b.list, &sub.list, &rect);
 }
 
@@ -707,6 +714,11 @@ fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Rgb, lw: f32)
 }
 
 /// The font settings of a dimension style's text style.
+/// VNCCad: a dimension's DIMBREAK gaps: (point, size; 0 = default).
+pub fn dim_breaks(d: &cadcraft_doc::Dimension) -> Vec<(Vec2, f64)> {
+    dim::breaks_of(d)
+}
+
 pub fn dim_text(d: &Drawing, st: &cadcraft_doc::DimStyle) -> DimText {
     let ts = text_style(d, &st.text_style);
     DimText { font: cadcraft_fonts::TextFont::resolve(&ts.font), fixed_height: ts.height, width_factor: ts.width_factor, oblique: ts.oblique }
@@ -833,7 +845,9 @@ fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Rgb, lw: f32)
                     ..cadcraft_fonts::TextParams::new(at, h)
                 }
             };
-            let (sh, _) = cadcraft_fonts::place(&font, &cell.text, &params);
+            // VNCCad: formulas (=B2*C2, =SUM(…)) show their value.
+            let shown = if cell.text.trim_start().starts_with('=') { t.display_text(r, c) } else { cell.text.clone() };
+            let (sh, _) = cadcraft_fonts::place(&font, &shown, &params);
             b.shaped(ctx, rgb, lw, &sh);
         }
     }

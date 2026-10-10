@@ -67,6 +67,7 @@ fn copy_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<us
     s.clipboard_base = base.unwrap_or(b.min);
     let n = ents.len();
     s.clipboard = ents;
+    s.clipboard_doc = s.state().ok().map(|st| st.doc.clone());
     Ok(n)
 }
 
@@ -98,7 +99,12 @@ pub(crate) fn paste(s: &mut Session, offset: Vec2) -> Result<Vec<Handle>> {
     let clip = s.clipboard.clone();
     let space = s.space();
     let m = Mat3::translate(offset);
+    let src = s.clipboard_doc.clone();
     let d = s.doc_mut()?;
+    // VNCCad: from another drawing, bring the blocks, layers and styles along.
+    if let Some(src) = src {
+        super::importdefs::import_defs(d, &src, &clip);
+    }
     let mut out = Vec::new();
     for mut e in clip {
         e.handle = d.new_handle();

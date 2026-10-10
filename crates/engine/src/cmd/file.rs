@@ -171,6 +171,18 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         }
         return Ok(s.active);
     }
+    // VNCCad: "Block from File": the drawing becomes a block of the active drawing.
+    if s.insert_next_open && s.state().is_ok() && (lower_name.ends_with(".dxf") || lower_name.ends_with(".dwg")) {
+        s.insert_next_open = false;
+        let block = super::importdefs::block_from_bytes(s, bytes, name, None, false)?;
+        s.echo(format!("Đã nạp {} thành block {block}.", file_name(name)));
+        if let Ok(st) = s.state_mut() {
+            st.revision += 1;
+        }
+        s.start("insert")?;
+        s.input(crate::Input::Text(block))?;
+        return Ok(s.active);
+    }
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let mut d = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
     // VNCCad: text in legacy Vietnamese fonts (TCVN3 .VnTime…, VNI-Times…) becomes Unicode.

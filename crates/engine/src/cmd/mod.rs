@@ -18,6 +18,7 @@ pub mod flow;
 mod gripcmds;
 pub mod group;
 mod hatch;
+pub mod importdefs;
 mod inquiry;
 mod layer;
 mod layout;
@@ -197,6 +198,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(blocktools::specs());
         v.extend(fields::specs());
         v.extend(audit::specs());
+        v.extend(importdefs::specs());
         v.extend(constraints::specs());
         v
     })
@@ -270,4 +272,9 @@ pub(crate) fn targets(s: &Session, p: &Value) -> Result<Vec<Handle>> {
 }
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
+}
+
+/// VNCCad: a number as typed by the user (no trailing zeros).
+pub(crate) fn fields_fmt(v: f64) -> String {
+    cadcraft_doc::formula::format_value(v)
 }

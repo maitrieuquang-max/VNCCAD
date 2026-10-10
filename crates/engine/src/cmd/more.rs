@@ -70,6 +70,24 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{points: [[x,y] × 3 or 4]} (AutoCAD order: the 3rd and 4th corners cross)")
             .interactive(|_| Ok(Box::new(Flow::new("solid", plan_solid, flow_solid))))
             .enabled(has_doc),
+        CommandSpec::new("burst", "Burst", run_burst)
+            .menu(&["Express", "Blocks", "Burst"])
+            .alias(&["phablock"])
+            .params("{handles?} → explodes block references keeping attribute values as text")
+            .interactive(|_| Ok(Box::new(Flow::new("burst", plan_select_only, flow_burst))))
+            .enabled(has_doc),
+        CommandSpec::new("txt2mtxt", "Convert Text to Mtext", run_txt2mtxt)
+            .menu(&["Express", "Text", "Convert Text to Mtext"])
+            .alias(&["gopchu"])
+            .params("{handles?} → one MTEXT, lines from top to bottom")
+            .interactive(|_| Ok(Box::new(Flow::new("txt2mtxt", plan_select_only, flow_txt2mtxt))))
+            .enabled(has_doc),
+        CommandSpec::new("tcount", "Text Count", run_tcount)
+            .menu(&["Express", "Text", "Automatic Text Numbering"])
+            .alias(&["danhso"])
+            .params("{handles?, start?: 1, step?: 1, mode?: prefix|suffix|overwrite (default overwrite), sort?: x|y (default y: top to bottom)}")
+            .interactive(|_| Ok(Box::new(Flow::new("tcount", plan_tcount, flow_tcount))))
+            .enabled(has_doc),
         CommandSpec::new("textmask", "Text Mask", run_textmask)
             .menu(&["Express", "Text", "Text Mask"])
             .alias(&["nenchu"])
@@ -730,6 +748,175 @@ fn flow_textmask(s: &mut Session, a: &[Ans]) -> Result<Value> {
     Ok(json!({ "message": format!("Đã che nền {} chữ.", out.len()) }))
 }
 
+// ------------------------------------------------------------------ BURST, TXT2MTXT, TCOUNT
+
+fn burst(s: &mut Session, hs: &[Handle]) -> Result<Vec<Handle>> {
+    let space = s.space();
+    let mut out = Vec::new();
+    for h in hs {
+        let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        let Some(parts) = super::modify::explode_kind(s.doc()?, &e) else { continue };
+        let attribs = ins.attribs.clone();
+        let d = s.doc_mut()?;
+        d.remove_entity(*h);
+        let mut add = |d: &mut Drawing, mut p: Entity| {
+            p.handle = d.new_handle();
+            out.push(p.handle);
+            if let Some(st) = d.space_mut(&space) {
+                st.push(p);
+            }
+        };
+        for p in parts {
+            // Attribute definitions are replaced by the reference's values.
+            if matches!(p.kind, EntityKind::AttDef(_)) {
+                continue;
+            }
+            add(d, p);
+        }
+        for a in attribs.into_iter().filter(|a| !a.invisible && !a.text.value.is_empty()) {
+            add(d, Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Text(a.text) });
+        }
+    }
+    s.set_selection(Vec::new());
+    Ok(out)
+}
+
+fn run_burst(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let out = burst(s, &hs)?;
+    Ok(json!({ "handles": hex(&out) }))
+}
+
+fn flow_burst(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let hs = a.first().map(Ans::sel).unwrap_or_default().to_vec();
+    let out = burst(s, &hs)?;
+    Ok(json!({ "message": format!("BURST: {} đối tượng.", out.len()) }))
+}
+
+fn txt2mtxt(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
+    let d = s.doc()?;
+    let mut texts: Vec<(Vec2, cadcraft_doc::Text, cadcraft_doc::Common)> = hs
+        .iter()
+        .filter_map(|h| d.entity(*h))
+        .filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some((t.insert.xy(), t.clone(), e.common.clone())) } else { None })
+        .collect();
+    if texts.is_empty() {
+        return Ok(None);
+    }
+    // Top to bottom, then left to right.
+    texts.sort_by(|a, b| b.0.y.total_cmp(&a.0.y).then(a.0.x.total_cmp(&b.0.x)));
+    let (first_pt, first, common) = texts.first().cloned().ok_or_else(|| bad("txt2mtxt", "no text"))?;
+    let contents = texts.iter().map(|(_, t, _)| t.value.replace('\\', "\\\\")).collect::<Vec<_>>().join("\\P");
+    let top = first_pt + Vec2::new(0.0, first.height).rotate(first.rotation);
+    let m = cadcraft_doc::MText {
+        insert: cadcraft_geom::Vec3::new(top.x, top.y, 0.0),
+        height: first.height,
+        width: 0.0,
+        attach: 1,
+        rotation: first.rotation,
+        style: first.style.clone(),
+        contents,
+        line_spacing: 1.0,
+    };
+    let d = s.doc_mut()?;
+    for h in hs {
+        if matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Text(_))) {
+            d.remove_entity(*h);
+        }
+    }
+    let space = s.space();
+    let h = s.doc_mut()?.add(&space, common, EntityKind::MText(m))?;
+    Ok(Some(h))
+}
+
+fn run_txt2mtxt(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let h = txt2mtxt(s, &hs)?;
+    Ok(json!({ "handle": h.map(|h| h.hex()) }))
+}
+
+fn flow_txt2mtxt(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let hs = a.first().map(Ans::sel).unwrap_or_default().to_vec();
+    txt2mtxt(s, &hs)?;
+    Ok(Value::Null)
+}
+
+/// Number texts in order (TCOUNT): overwrite, prefix or suffix with start, start+step…
+fn tcount(s: &mut Session, hs: &[Handle], start: f64, step: f64, mode: &str, sort_x: bool) -> Result<usize> {
+    let d = s.doc()?;
+    let mut items: Vec<(Handle, Vec2)> = hs
+        .iter()
+        .filter_map(|h| d.entity(*h))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some((e.handle, t.insert.xy())),
+            EntityKind::MText(t) => Some((e.handle, t.insert.xy())),
+            _ => None,
+        })
+        .collect();
+    if sort_x {
+        items.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(b.1.y.total_cmp(&a.1.y)));
+    } else {
+        items.sort_by(|a, b| b.1.y.total_cmp(&a.1.y).then(a.1.x.total_cmp(&b.1.x)));
+    }
+    let n = items.len();
+    let d = s.doc_mut()?;
+    for (k, (h, _)) in items.into_iter().enumerate() {
+        let v = start + step * k as f64;
+        let num = super::fields_fmt(v);
+        d.modify_entity(h, |e| {
+            let apply = |old: &str| match mode {
+                "prefix" => format!("{num}{old}"),
+                "suffix" => format!("{old}{num}"),
+                _ => num.clone(),
+            };
+            match &mut e.kind {
+                EntityKind::Text(t) => t.value = apply(&t.value),
+                EntityKind::MText(t) => t.contents = apply(&t.contents),
+                _ => {}
+            }
+        })?;
+    }
+    Ok(n)
+}
+
+fn run_tcount(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let n = tcount(
+        s,
+        &hs,
+        f64_or(p, "start", 1.0),
+        f64_or(p, "step", 1.0),
+        &str_param(p, "mode").unwrap_or("overwrite").to_ascii_lowercase(),
+        str_param(p, "sort") == Some("x"),
+    )?;
+    Ok(json!({ "numbered": n }))
+}
+
+fn plan_tcount(_s: &Session, a: &[Ans]) -> Option<Ask> {
+    match a.len() {
+        0 => Some(Ask::Select("Chọn chữ cần đánh số".into())),
+        1 => Some(Ask::Kw { msg: "Sắp xếp theo".into(), kws: vec!["X", "Y"], default: Some("Y") }),
+        2 => Some(Ask::Num { msg: "Số bắt đầu".into(), default: Some(1.0) }),
+        3 => Some(Ask::Num { msg: "Bước".into(), default: Some(1.0) }),
+        4 => Some(Ask::Kw { msg: "Cách ghi".into(), kws: vec!["Overwrite", "Prefix", "Suffix"], default: Some("Overwrite") }),
+        _ => None,
+    }
+}
+
+fn flow_tcount(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let hs = a.first().map(Ans::sel).unwrap_or_default().to_vec();
+    let n = tcount(
+        s,
+        &hs,
+        a.get(2).and_then(Ans::num).unwrap_or(1.0),
+        a.get(3).and_then(Ans::num).unwrap_or(1.0),
+        &a.get(4).map(|x| x.text().to_ascii_lowercase()).unwrap_or_else(|| "overwrite".into()),
+        a.get(1).map(Ans::text) == Some("X"),
+    )?;
+    Ok(json!({ "message": format!("Đã đánh số {n} chữ.") }))
+}
+
 // ------------------------------------------------------------------ SOLID
 
 fn add_solid(s: &mut Session, pts: &[Vec2]) -> Result<Handle> {
@@ -845,5 +1032,27 @@ mod tests {
         let (iw, it) = (o.iter().position(|x| *x == w).unwrap(), o.iter().position(|x| *x == h).unwrap());
         assert_eq!(iw + 1, it);
         let _ = Input::Enter;
+    }
+
+    #[test]
+    fn burst_txt2mtxt_and_tcount() {
+        let mut s = Session::new();
+        let mut hs = Vec::new();
+        for (i, y) in [30.0, 10.0, 20.0].iter().enumerate() {
+            let r = s.execute("text", &json!({ "at": [0, y], "height": 2.5, "text": format!("C{i}") })).unwrap();
+            hs.push(Handle::parse_hex(r["handle"].as_str().or(r["handles"][0].as_str()).unwrap()).unwrap());
+        }
+        s.execute("tcount", &json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "mode": "prefix", "start": 1 })).unwrap();
+        let val = |s: &Session, h: Handle| {
+            if let EntityKind::Text(t) = &s.doc().unwrap().entity(h).unwrap().kind { t.value.clone() } else { String::new() }
+        };
+        assert_eq!(val(&s, hs[0]), "1C0");
+        assert_eq!(val(&s, hs[2]), "2C2");
+        assert_eq!(val(&s, hs[1]), "3C1");
+        let r = s.execute("txt2mtxt", &json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() })).unwrap();
+        let m = Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+        let EntityKind::MText(mt) = &s.doc().unwrap().entity(m).unwrap().kind else { panic!() };
+        assert_eq!(mt.contents, "1C0\\P2C2\\P3C1");
+        assert_eq!(s.doc().unwrap().model.len(), 1);
     }
 }

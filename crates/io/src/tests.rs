@@ -308,6 +308,7 @@ fn pdf_layout_one_to_one_with_viewport() {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
         }),
     )
     .unwrap();
@@ -1240,4 +1241,28 @@ fn xclip_boundaries_survive_saving() {
             assert!(a.near(*b, 1e-6), "{name}: {got:?}");
         }
     }
+}
+
+/// VNCCad: table formulas: the file holds the values (other programs show them) and the formulas.
+#[test]
+fn table_formulas_survive_dxf_with_their_values() {
+    let mut d = Drawing::new_metric();
+    let cell = |t: &str| TableCell { text: t.into(), merged: None };
+    let t = Table {
+        insert: Vec3::ZERO,
+        col_widths: vec![10.0, 10.0, 10.0],
+        row_heights: vec![5.0, 5.0],
+        cells: vec![vec![cell("2"), cell("3"), cell("=A1*B1")], vec![cell("4"), cell("5"), cell("=SUM(A1:B2)")]],
+        style: "Standard".into(),
+        text_height: 2.5,
+        title: false,
+        header: false,
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Table(t.clone())).unwrap();
+    let text = write_dxf(&d);
+    assert!(text.contains("\n6\n") || text.contains("\r\n6\r\n") || text.lines().any(|l| l.trim() == "6"), "value written");
+    let back = read_dxf(text.as_bytes()).unwrap();
+    let got = first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(got.cells[0][2].text, "=A1*B1");
+    assert_eq!(got.display_text(1, 2), "14");
 }

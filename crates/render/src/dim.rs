@@ -701,7 +701,90 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     }
     g.text_pos = text_mid;
     g.text_angle = text_angle;
+    apply_breaks(&mut g, d, asz.max(th));
     g
+}
+
+/// VNCCad: DIMBREAK — gaps in the dimension and extension lines. Stored in the dimension's
+/// overrides as `vnccadBreaks`: `[[x, y, size?], …]` (size 0: the default, about an arrow).
+pub fn breaks_of(d: &Dimension) -> Vec<(Vec2, f64)> {
+    d.overrides
+        .get("vnccadBreaks")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let p = p.as_array()?;
+                    let x = p.first()?.as_f64()?;
+                    let y = p.get(1)?.as_f64()?;
+                    let s = p.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let v = Vec2::new(x, y);
+                    (v.is_finite() && s.is_finite()).then_some((v, s))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_breaks(g: &mut DimGeometry, d: &Dimension, default_size: f64) {
+    let breaks = breaks_of(d);
+    if breaks.is_empty() {
+        return;
+    }
+    let lines = std::mem::take(&mut g.lines);
+    let roles = std::mem::take(&mut g.line_roles);
+    for (k, line) in lines.into_iter().enumerate() {
+        let role = roles.get(k).copied().unwrap_or(LineRole::Dim);
+        let mut pieces: Vec<Vec<Vec2>> = vec![line];
+        for (p, size) in &breaks {
+            let half = if *size > 0.0 { size / 2.0 } else { default_size };
+            let mut next = Vec::new();
+            for piece in pieces {
+                let mut cur: Vec<Vec2> = Vec::new();
+                for w in piece.windows(2) {
+                    let (Some(a), Some(b)) = (w.first().copied(), w.get(1).copied()) else { continue };
+                    let dv = b - a;
+                    let len = dv.len();
+                    let on_line = len > 0.0 && {
+                        let t = ((*p - a).dot(dv) / (len * len)).clamp(0.0, 1.0);
+                        (a + dv * t).dist(*p) <= half * 0.05 + 1e-9
+                    };
+                    if !on_line {
+                        if cur.is_empty() {
+                            cur.push(a);
+                        }
+                        cur.push(b);
+                        continue;
+                    }
+                    let u = dv * (1.0 / len);
+                    let tp = (*p - a).dot(u);
+                    let (t0, t1) = (tp - half, tp + half);
+                    if t0 > 0.0 {
+                        if cur.is_empty() {
+                            cur.push(a);
+                        }
+                        cur.push(a + u * t0.min(len));
+                    }
+                    if cur.len() >= 2 {
+                        next.push(std::mem::take(&mut cur));
+                    }
+                    cur.clear();
+                    if t1 < len {
+                        cur.push(a + u * t1.max(0.0));
+                        cur.push(b);
+                    }
+                }
+                if cur.len() >= 2 {
+                    next.push(cur);
+                }
+            }
+            pieces = next;
+        }
+        for piece in pieces {
+            g.lines.push(piece);
+            g.line_roles.push(role);
+        }
+    }
 }
 
 /// `%%` codes in the plain value become their characters (`%%c` → ⌀, `%%p` → ±, `%%d` → °).

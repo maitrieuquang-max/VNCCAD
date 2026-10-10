@@ -92,6 +92,12 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | Kích thước gấp khúc | `DIMJOGGED` (`JOG`) | Cho cung bán kính lớn (đường cong tuyến). Lưu DXF/DWG dạng kích thước bán kính kèm block hình vẽ, VNCCad đọc lại đủ điểm gấp |
 | Mặt tô 2D | `SOLID` (`SO`) | 3 hoặc 4 điểm như AutoCAD |
 | In ra máy in | `PRINTER` (`INMAY`, File > Print to Printer…, Ctrl+Shift+P) | Desktop: gửi PDF tới máy in mặc định (Windows qua chương trình đọc PDF có lệnh In; macOS/Linux qua `lp`), không được thì mở PDF để in; web: hộp thoại in của trình duyệt |
+| Viewport đa giác | `VPCLIP` (`CATVP`): chọn viewport → Object (polyline kín/đường tròn) hoặc Delete | Bản vẽ AutoCAD có viewport cắt theo đa giác giờ hiện đúng; lưu lại đúng cách AutoCAD (viewport trỏ tới LWPOLYLINE) |
+| Chèn bản vẽ khác làm block | `BLOCKFROMFILE` (`CHENFILE`, Insert > Block from File…) | Như INSERT → Browse của AutoCAD: file DXF/DWG thành block (kèm layer, kiểu chữ, block lồng), rồi INSERT hỏi điểm chèn. Chạy cả trên web |
+| Copy/Paste giữa hai bản vẽ | `COPYCLIP` / `PASTECLIP` | Giờ mang theo định nghĩa block (cả block lồng, block động), layer, kiểu đường, kiểu chữ, kiểu kích thước — trước đây dán block sang bản vẽ khác bị mất hình |
+| Công thức trong bảng | Gõ `=B2*C2`, `=SUM(B2:B10)`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `ROUND(x; n)` vào ô | Ô hiện giá trị; file lưu cả giá trị (AutoCAD và trình xem khác thấy số) lẫn công thức (VNCCad đọc lại). Đọc được số kiểu `12,5` và `1.250,75` |
+| Cắt kích thước | `DIMBREAK` (`CATKT`): Auto / Manual / Remove | Auto cắt đường kích thước và đường gióng nơi đối tượng khác cắt qua |
+| Express Tools | `BURST` (`PHABLOCK`), `TXT2MTXT` (`GOPCHU`), `TCOUNT` (`DANHSO`) | BURST giữ giá trị thuộc tính thành chữ; TCOUNT đánh số cọc/mốc theo thứ tự X hoặc Y (ghi đè, thêm trước, thêm sau) |
 
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 

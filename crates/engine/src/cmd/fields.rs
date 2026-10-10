@@ -25,6 +25,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(Flow::new("field", plan_field, flow_field))))
             .enabled(has_doc),
         CommandSpec::new("updatefield", "Update Fields", run_updatefield).menu(&["Tools", "Update Fields"]).params("{} → recomputes every field").enabled(has_doc),
+        CommandSpec::new("dimbreak", "Dimension Break", run_dimbreak)
+            .menu(&["Dimension", "Dimension Break"])
+            .alias(&["catkt"])
+            .params("{handles?, mode?: auto|manual|remove (default auto), p1?, p2? (manual: the gap between them)}")
+            .interactive(|_| Ok(Box::new(Flow::new("dimbreak", plan_dimbreak, flow_dimbreak))))
+            .enabled(has_doc),
         CommandSpec::new("dimjogged", "Jogged Dimension", run_dimjogged)
             .menu(&["Dimension", "Jogged"])
             .alias(&["jog", "dimjog"])
@@ -327,6 +333,129 @@ fn flow_dimjogged(s: &mut Session, a: &[Ans]) -> Result<Value> {
     Ok(Value::Null)
 }
 
+// ------------------------------------------------------------------ DIMBREAK
+
+fn seg_x(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<Vec2> {
+    let r = b - a;
+    let q = d - c;
+    let den = r.cross(q);
+    if den.abs() < 1e-300 {
+        return None;
+    }
+    let t = (c - a).cross(q) / den;
+    let u = (c - a).cross(r) / den;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then(|| a + r * t)
+}
+
+/// Where other objects cross a dimension's dimension and extension lines.
+fn auto_breaks(s: &Session, h: Handle) -> Vec<Vec2> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    let Some(e) = d.entity(h) else { return Vec::new() };
+    let EntityKind::Dimension(dm) = &e.kind else { return Vec::new() };
+    let mut clean = dm.clone();
+    clean.overrides.remove("vnccadBreaks");
+    let st = d.dim_style(&clean.style).cloned().unwrap_or_default();
+    let g = cadcraft_render::dimension_geometry(&clean, &st, d.header.f64("DIMSCALE", 1.0));
+    let mine: Vec<(Vec2, Vec2)> =
+        g.lines.iter().flat_map(|l| l.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect::<Vec<_>>()).collect();
+    let bb = cadcraft_geom::Bounds2::from_points(mine.iter().flat_map(|(a, b)| [*a, *b]));
+    let space = s.space();
+    let mut out: Vec<Vec2> = Vec::new();
+    for o in d.space(&space).map(|st| st.iter().collect::<Vec<_>>()).unwrap_or_default() {
+        if o.handle == h || matches!(o.kind, EntityKind::Text(_) | EntityKind::MText(_)) || !d.is_visible(o) {
+            continue;
+        }
+        if !cadcraft_doc::entity_bounds(d, o, 0).intersects(&bb) {
+            continue;
+        }
+        for pl in crate::select::hit_polylines(d, o, bb.width().max(bb.height()) * 1e-3) {
+            for w in pl.windows(2) {
+                let (Some(c), Some(e2)) = (w.first().copied(), w.get(1).copied()) else { continue };
+                for (a, b) in &mine {
+                    if let Some(x) = seg_x(*a, *b, c, e2)
+                        && !out.iter().any(|q| q.near(x, 1e-9))
+                        && out.len() < 1000
+                    {
+                        out.push(x);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn set_breaks(s: &mut Session, h: Handle, breaks: Option<Vec<(Vec2, f64)>>) -> Result<()> {
+    s.doc_mut()?.modify_entity(h, |e| {
+        if let EntityKind::Dimension(dm) = &mut e.kind {
+            match &breaks {
+                Some(b) if !b.is_empty() => {
+                    dm.overrides.insert("vnccadBreaks".into(), json!(b.iter().map(|(p, sz)| json!([p.x, p.y, sz])).collect::<Vec<_>>()));
+                }
+                _ => {
+                    dm.overrides.remove("vnccadBreaks");
+                }
+            }
+            dm.block = None;
+        }
+    })?;
+    Ok(())
+}
+
+fn dimbreak(s: &mut Session, hs: &[Handle], mode: &str, p1: Option<Vec2>, p2: Option<Vec2>) -> Result<usize> {
+    let dims: Vec<Handle> = {
+        let d = s.doc()?;
+        hs.iter().copied().filter(|h| d.entity(*h).is_some_and(|e| matches!(e.kind, EntityKind::Dimension(_)))).collect()
+    };
+    let mut n = 0;
+    for h in &dims {
+        match mode {
+            "remove" => set_breaks(s, *h, None)?,
+            "manual" => {
+                let (Some(a), Some(b)) = (p1, p2) else { return Err(bad("dimbreak", "manual needs p1 and p2")) };
+                let mut cur = s
+                    .doc()?
+                    .entity(*h)
+                    .and_then(|e| if let EntityKind::Dimension(dm) = &e.kind { Some(cadcraft_render::dim_breaks(dm)) } else { None })
+                    .unwrap_or_default();
+                cur.push((a.mid(b), a.dist(b)));
+                set_breaks(s, *h, Some(cur))?;
+                n += 1;
+            }
+            _ => {
+                let pts = auto_breaks(s, *h);
+                n += pts.len();
+                set_breaks(s, *h, Some(pts.into_iter().map(|p| (p, 0.0)).collect()))?;
+            }
+        }
+    }
+    Ok(n)
+}
+
+fn run_dimbreak(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let n = dimbreak(s, &hs, &str_param(p, "mode").unwrap_or("auto").to_ascii_lowercase(), point_param(p, "p1"), point_param(p, "p2"))?;
+    Ok(json!({ "breaks": n }))
+}
+
+fn plan_dimbreak(_s: &Session, a: &[Ans]) -> Option<Ask> {
+    match a.len() {
+        0 => Some(Ask::Select("Chọn kích thước".into())),
+        1 => Some(Ask::Kw { msg: "Cắt".into(), kws: vec!["Auto", "Manual", "Remove"], default: Some("Auto") }),
+        2 if a.get(1).map(Ans::text) == Some("Manual") => Some(Ask::Point("Điểm cắt thứ nhất".into())),
+        3 if a.get(1).map(Ans::text) == Some("Manual") => Some(Ask::Point("Điểm cắt thứ hai".into())),
+        _ => None,
+    }
+}
+
+fn flow_dimbreak(s: &mut Session, a: &[Ans]) -> Result<Value> {
+    let hs = a.first().map(Ans::sel).unwrap_or_default().to_vec();
+    let mode = a.get(1).map(|x| x.text().to_ascii_lowercase()).unwrap_or_else(|| "auto".into());
+    let pt = |i: usize| if let Some(Ans::Point(p)) = a.get(i) { Some(*p) } else { None };
+    let n = dimbreak(s, &hs, &mode, pt(2), pt(3))?;
+    Ok(json!({ "message": if mode == "remove" { "Đã bỏ chỗ cắt.".to_string() } else { format!("{n} chỗ cắt.") } }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +510,29 @@ mod tests {
         let back = cadcraft_io::read(&cadcraft_io::write(&d, "j.dxf").unwrap(), "j.dxf").unwrap();
         let EntityKind::Dimension(b) = &back.entity(h).unwrap().kind else { panic!() };
         assert!(matches!(b.kind, DimKind::Jogged) && b.p13.xy().near(Vec2::new(300.0, 150.0), 1e-9));
+    }
+
+    #[test]
+    fn dimbreak_cuts_where_lines_cross() {
+        let mut s = Session::new();
+        let r = s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [100, 0], "at": [50, 20] })).unwrap();
+        let h = hex(&r);
+        s.execute("line", &json!({ "points": [[30, -10], [30, 40]] })).unwrap();
+        let count = |s: &Session| {
+            let d = s.doc().unwrap();
+            let EntityKind::Dimension(dm) = &d.entity(h).unwrap().kind else { panic!() };
+            let st = d.dim_style(&dm.style).cloned().unwrap_or_default();
+            cadcraft_render::dimension_geometry(dm, &st, 1.0).lines.len()
+        };
+        let before = count(&s);
+        let r = s.execute("dimbreak", &json!({ "handles": [h.hex()] })).unwrap();
+        assert_eq!(r["breaks"], 1);
+        assert_eq!(count(&s), before + 1, "the dimension line is in two pieces");
+        let d = s.doc().unwrap().clone();
+        let back = cadcraft_io::read(&cadcraft_io::write(&d, "b.dxf").unwrap(), "b.dxf").unwrap();
+        let EntityKind::Dimension(b) = &back.entity(h).unwrap().kind else { panic!() };
+        assert_eq!(cadcraft_render::dim_breaks(b).len(), 1);
+        s.execute("dimbreak", &json!({ "handles": [h.hex()], "mode": "remove" })).unwrap();
+        assert_eq!(count(&s), before);
     }
 }
