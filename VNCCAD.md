@@ -100,6 +100,16 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | Hatch biên tròn | Đọc DXF/DWG | Hatch có biên là cung/đường tròn trọn vòng (cột tròn tô đặc…) hiện đúng; trước đây bị mất và AUDIT coi là lỗi |
 | Express Tools | `BURST` (`PHABLOCK`), `TXT2MTXT` (`GOPCHU`), `TCOUNT` (`DANHSO`) | BURST giữ giá trị thuộc tính thành chữ; TCOUNT đánh số cọc/mốc theo thứ tự X hoặc Y (ghi đè, thêm trước, thêm sau) |
 
+### Giai đoạn 7 – dung sai hình học, multiline thật, vẽ tay
+
+| Nhóm | Lệnh (bí danh) | Ghi chú |
+|---|---|---|
+| Dung sai hình học | `TOLERANCE` (`TOL`, `DUNGSAI`) | Khung GD&T: 14 ký hiệu (vị trí, độ phẳng, độ vuông góc…), Ø, (M)/(L)/(S)/(P), chuẩn A B C, nhiều dòng; cỡ chữ theo kiểu kích thước. Đọc/ghi thực thể TOLERANCE của AutoCAD (DXF/DWG) |
+| Multiline | `MLINE` (`ML`), `MLSTYLE` (`KIEUMLINE`) | MLINE giờ là thực thể MLINE thật theo kiểu (nhiều đường, độ lệch, màu, kiểu đường từng đường, nắp đầu thẳng/cung, nét góc, tô nền); đọc/ghi MLINE và MLINESTYLE qua DXF/DWG; EXPLODE ra các đường |
+| Sửa multiline | `MLEDIT` (`SUAMLINE`) | Giao chéo kín/hở/gộp, chữ T kín/hở/gộp, nối góc, thêm/xóa đỉnh, cắt một đường/cắt hết, nối lại; nét cắt lưu được vào file |
+| Vẽ tay | `SKETCH` (`VETAY`) | Bấm hạ/nhấc bút, ghi theo chuột; kiểu Polyline/Spline/Line (SKPOLY), bước ghi |
+| Sửa lỗi | Lưu WIPEOUT | Wipeout (kể cả do TEXTMASK tạo) trước đây bị mất khi lưu; nay ghi đúng và đọc đúng chiều biên như AutoCAD |
+
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
 Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:
@@ -122,6 +132,7 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 - Chế độ offline của bản web chỉ có hiệu lực khi trang được phục vụ qua **HTTPS** (hoặc `localhost`) và đã mở online ít nhất một lần. Bản vẽ rất lớn trên web chậm hơn desktop.
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
 - Block động: lưu file từ VNCCad giữ thuộc tính động cho VNCCad (bản ghi riêng), nhưng AutoCAD mở lại sẽ thấy block thường (các đối tượng tham số/hành động của AutoCAD không được ghi lại). Các tham số khác (Point, Polar, XY, Rotation, Lookup, Alignment) chưa hỗ trợ. Hành động Array trong file DWG có thể mất danh sách đối tượng khi đọc (giới hạn của bộ đọc DWG).
+- Multiline: chưa cắt/kéo dài được bằng TRIM/EXTEND (như AutoCAD, phải dùng MLEDIT); góc nắp khác 90° chưa vẽ nghiêng.
 - Reactor LISP không lưu cùng bản vẽ; chưa có `vlr-mouse-reactor`, `vlr-sysvar-reactor` (tạo được nhưng không phát sự kiện).
 
 ## Build

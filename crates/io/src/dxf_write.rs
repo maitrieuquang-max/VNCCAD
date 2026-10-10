@@ -124,6 +124,10 @@ struct Ctx {
     pdf_dict: Option<String>,
     /// VNCCad: XCLIPped INSERT → (extension dictionary, ACAD_FILTER dictionary, SPATIAL_FILTER).
     clips: HashMap<Handle, (String, String, String)>,
+    /// VNCCad: the drawing has wipeouts (their CLASS is needed).
+    wipeouts: bool,
+    /// VNCCad: multiline style name → MLINESTYLE handle (the first is STANDARD's).
+    mline_styles: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -871,7 +875,76 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 }
             }
         }
-        // Not yet written: images, wipeouts, tables, multileaders, unknown objects.
+        EntityKind::Wipeout(wo) if wo.boundary.len() >= 3 => {
+            // VNCCad: the boundary in the unit square of its extents (y down, as AutoCAD).
+            let b = cadcraft_geom::Bounds2::from_points(wo.boundary.iter().copied());
+            let (bw, bh) = (b.width().max(1e-9), b.height().max(1e-9));
+            w.s(0, "WIPEOUT");
+            common(w, e, owner, paper, "AcDbWipeout");
+            w.i(90, 0);
+            w.p(10, b.min.to3(0.0));
+            w.p(11, Vec3::new(bw, 0.0, 0.0));
+            w.p(12, Vec3::new(0.0, bh, 0.0));
+            w.f(13, 1.0);
+            w.f(23, 1.0);
+            w.s(340, "0");
+            w.i(70, 7);
+            w.i(280, 1);
+            w.i(281, 50);
+            w.i(282, 50);
+            w.i(283, 0);
+            w.s(360, "0");
+            w.i(71, 2);
+            w.i(91, wo.boundary.len() as i64 + 1);
+            for p in wo.boundary.iter().chain(wo.boundary.first()) {
+                w.f(14, (p.x - b.min.x) / bw - 0.5);
+                w.f(24, 0.5 - (p.y - b.min.y) / bh);
+            }
+        }
+        EntityKind::MLine(m) if m.vertices.len() >= 2 => {
+            let sh = cx
+                .mline_styles
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&m.style))
+                .or(cx.mline_styles.first())
+                .map(|(_, h)| h.clone())
+                .unwrap_or_else(|| "0".into());
+            let ne = m.vertices.first().map_or(0, |v| v.params.len());
+            w.s(0, "MLINE");
+            common(w, e, owner, paper, "AcDbMline");
+            w.s(2, &m.style);
+            w.s(340, sh);
+            w.f(40, m.scale);
+            w.i(70, i64::from(m.justification));
+            w.i(71, 1 | if m.closed { 2 } else { 0 } | if m.no_start_caps { 4 } else { 0 } | if m.no_end_caps { 8 } else { 0 });
+            w.i(72, m.vertices.len() as i64);
+            w.i(73, ne as i64);
+            w.p(10, m.vertices.first().map(|v| v.p).unwrap_or_default().to3(0.0));
+            w.p(210, Vec3::Z);
+            for (i, v) in m.vertices.iter().enumerate() {
+                w.p(11, v.p.to3(0.0));
+                w.p(12, v.dir.to3(0.0));
+                w.p(13, v.miter.to3(0.0));
+                for e in 0..ne {
+                    let ps = v.params.get(e).cloned().unwrap_or_else(|| vec![0.0, 0.0]);
+                    let len = m.element_span(i, e).map_or(0.0, |(_, l)| l);
+                    w.i(74, ps.len() as i64);
+                    for x in &ps {
+                        w.f(41, if *x > f64::MAX / 8.0 { len.max(0.0) * 2.0 + 1.0 } else { *x });
+                    }
+                    w.i(75, 0);
+                }
+            }
+        }
+        EntityKind::Tolerance(t) => {
+            w.s(0, "TOLERANCE");
+            common(w, e, owner, paper, "AcDbFcf");
+            w.s(3, &t.style);
+            w.p(10, t.insert);
+            w.s(1, &t.text);
+            w.p(11, t.dir.to3(0.0));
+        }
+        // Not yet written: unknown objects.
         EntityKind::Image(im) if cx.pdfs.contains_key(&e.handle) => {
             let Some(def) = cx.pdfs.get(&e.handle).cloned() else { return };
             // Underlay units are inches of the page: scale = drawing units per inch.
@@ -1267,6 +1340,13 @@ pub fn write(d: &Drawing) -> String {
     if !cx.pdf_defs.is_empty() {
         cx.pdf_dict = Some(w.h());
     }
+    {
+        let std = [MLineStyle::default()];
+        let styles: &[MLineStyle] = if d.mline_styles.is_empty() { &std } else { &d.mline_styles };
+        cx.mline_styles = styles.iter().map(|s| (s.name.clone(), w.h())).collect();
+    }
+    let mline_style_dict = w.h();
+    cx.wipeouts = every.iter().any(|e| matches!(&e.kind, EntityKind::Wipeout(wo) if wo.boundary.len() >= 3));
     let default_table_style = [TableStyle::default()];
     let table_styles: &[TableStyle] = if d.table_styles.is_empty() { &default_table_style } else { &d.table_styles };
     cx.table_styles = table_styles.iter().map(|s| (s.name.clone(), w.h())).collect();
@@ -1336,11 +1416,23 @@ pub fn write(d: &Drawing) -> String {
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));
     }
+    if cx.wipeouts {
+        classes.push(("WIPEOUT", "AcDbWipeout", 127, true));
+    }
     for (dxf_name, cpp, proxy, is_entity) in classes {
         w.s(0, "CLASS");
         w.s(1, dxf_name);
         w.s(2, cpp);
-        w.s(3, if dxf_name.starts_with("IMAGE") || dxf_name == "RASTERVARIABLES" { "ISM" } else { "ObjectDBX Classes" });
+        w.s(
+            3,
+            if dxf_name.starts_with("IMAGE") || dxf_name == "RASTERVARIABLES" {
+                "ISM"
+            } else if dxf_name == "WIPEOUT" {
+                "WipeOut|AutoCAD Express Tool|expresstools@autodesk.com"
+            } else {
+                "ObjectDBX Classes"
+            },
+        );
         w.i(90, proxy);
         w.i(280, 0);
         w.i(281, i64::from(is_entity));
@@ -1613,6 +1705,8 @@ pub fn write(d: &Drawing) -> String {
     }
     w.s(3, "ACAD_TABLESTYLE");
     w.s(350, table_style_dict.clone());
+    w.s(3, "ACAD_MLINESTYLE");
+    w.s(350, mline_style_dict.clone());
     if constraint_chunks.is_some() {
         w.s(3, dxf_ext::CONSTRAINTS_KEY);
         w.s(350, constraints_xrec.clone());
@@ -1671,6 +1765,42 @@ pub fn write(d: &Drawing) -> String {
     }
     for (s, (_, h)) in table_styles.iter().zip(&cx.table_styles) {
         table_style_obj(&mut w, s, h, &table_style_dict);
+    }
+    // VNCCad: multiline styles.
+    w.s(0, "DICTIONARY");
+    w.s(5, mline_style_dict.clone());
+    w.s(330, root_dict.clone());
+    w.s(100, "AcDbDictionary");
+    w.i(281, 1);
+    for (name, h) in &cx.mline_styles {
+        w.s(3, name);
+        w.s(350, h);
+    }
+    {
+        let std = [MLineStyle::default()];
+        let styles: &[MLineStyle] = if d.mline_styles.is_empty() { &std } else { &d.mline_styles };
+        for (st, (_, h)) in styles.iter().zip(&cx.mline_styles) {
+            w.s(0, "MLINESTYLE");
+            w.s(5, h);
+            w.group("ACAD_REACTORS", 330, &[&mline_style_dict]);
+            w.s(330, mline_style_dict.clone());
+            w.s(100, "AcDbMlineStyle");
+            w.s(2, &st.name);
+            w.i(70, st.flags());
+            w.s(3, &st.description);
+            w.i(62, i64::from(st.fill_color.to_aci()));
+            w.f(51, st.start_angle);
+            w.f(52, st.end_angle);
+            w.i(71, st.elements.len() as i64);
+            for el in &st.elements {
+                w.f(49, el.offset);
+                w.i(62, i64::from(el.color.to_aci()));
+                // A linetype missing from the drawing would make the file invalid.
+                let lt = el.linetype.trim();
+                let known = lt.eq_ignore_ascii_case("bylayer") || lt.eq_ignore_ascii_case("byblock") || d.linetype(lt).is_some();
+                w.s(6, if lt.is_empty() || !known { "BYLAYER" } else { lt });
+            }
+        }
     }
     // VNCCad: dynamic blocks.
     if let Some(chunks) = &dyn_chunks {

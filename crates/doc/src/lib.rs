@@ -13,6 +13,7 @@ mod extents;
 pub mod formula;
 mod header;
 pub mod library;
+mod mline;
 mod store;
 mod tables;
 pub mod vnlegacy;
@@ -26,6 +27,7 @@ pub use dynblock::*;
 pub use entity::*;
 pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
 pub use header::{HVal, Header};
+pub use mline::*;
 pub use store::EntityStore;
 pub use tables::*;
 
@@ -61,6 +63,8 @@ pub struct Drawing {
     pub dim_styles: Vec<DimStyle>,
     pub mleader_styles: Vec<MLeaderStyle>,
     pub table_styles: Vec<TableStyle>,
+    /// VNCCad: multiline styles (MLSTYLE).
+    pub mline_styles: Vec<MLineStyle>,
     pub blocks: BTreeMap<String, std::sync::Arc<Block>>,
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
@@ -144,6 +148,7 @@ impl Drawing {
             dim_styles: vec![DimStyle::default()],
             mleader_styles: vec![MLeaderStyle::default()],
             table_styles: vec![TableStyle::default()],
+            mline_styles: vec![MLineStyle::default()],
             blocks: BTreeMap::new(),
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],
@@ -183,6 +188,9 @@ impl Drawing {
     }
     pub fn text_style(&self, name: &str) -> Option<&TextStyle> {
         self.text_styles.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+    }
+    pub fn mline_style(&self, name: &str) -> Option<&MLineStyle> {
+        self.mline_styles.iter().find(|l| l.name.eq_ignore_ascii_case(name))
     }
     pub fn dim_style(&self, name: &str) -> Option<&DimStyle> {
         self.dim_styles.iter().find(|l| l.name.eq_ignore_ascii_case(name))

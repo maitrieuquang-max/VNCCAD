@@ -869,6 +869,7 @@ fn run_chamfer(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<Entity>> {
     match &e.kind {
+        EntityKind::MLine(m) => Some(super::mltol::explode_mline(d, e, m)),
         EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
             Some(

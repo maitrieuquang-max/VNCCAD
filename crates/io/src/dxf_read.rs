@@ -281,6 +281,16 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         "3DFACE" => EntityKind::Face3d(Face3d { corners: [t.p(10), t.p(11), t.p(12), t.p(13)], hidden_edges: t.i(70).unwrap_or(0) as u8 }),
         "HATCH" => hatch(tags, &t)?,
         "ACAD_TABLE" => EntityKind::Table(acad_table(tags)),
+        "MLINE" => EntityKind::MLine(mline(tags, &t)),
+        "TOLERANCE" => {
+            let dir = Vec2::new(t.fd(11, 1.0), t.fd(21, 0.0)).normalized();
+            EntityKind::Tolerance(cadcraft_doc::Tolerance {
+                insert: ocs(&c, t.p(10)),
+                dir: if dir.len() > 0.5 { dir } else { Vec2::X },
+                text: t.s(1).unwrap_or_default(),
+                style: t.s(3).unwrap_or_else(|| "Standard".into()),
+            })
+        }
         "VIEWPORT" => EntityKind::Viewport(Viewport {
             center: t.p(10),
             width: t.fd(40, 1.0),
@@ -297,7 +307,20 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let o = t.p(10);
             let u = t.p(11);
             let v = t.p(12);
-            let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (q.y + 0.5)).collect();
+            // VNCCad: clip coordinates run from the top-left corner, y down (as AutoCAD writes
+            // them); a rectangular boundary is given by two corners.
+            let size = Vec2::new(t.fd(13, 1.0), t.fd(23, 1.0));
+            let size = Vec2::new(if size.x.abs() > 1e-12 { size.x } else { 1.0 }, if size.y.abs() > 1e-12 { size.y } else { 1.0 });
+            let at = |q: Vec2| o.xy() + u.xy() * (q.x + size.x * 0.5) + v.xy() * (size.y * 0.5 - q.y);
+            let mut raw = t.pts(14);
+            if raw.len() == 2 {
+                let (a, b) = (raw[0], raw[1]);
+                raw = vec![a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)];
+            }
+            if raw.len() > 3 && raw.first() == raw.last() {
+                raw.pop();
+            }
+            let pts: Vec<Vec2> = raw.into_iter().map(at).collect();
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
         "PDFUNDERLAY" => {
@@ -330,6 +353,79 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }),
     };
     Some((c, k))
+}
+
+/// VNCCad: an MLINE: vertices with their directions, miters and element parameters.
+fn mline(tags: &[Tag], t: &T) -> cadcraft_doc::MLine {
+    const MAX: usize = 1_000_000;
+    let flags = t.i(71).unwrap_or(1);
+    let mut m = cadcraft_doc::MLine {
+        style: t.s(2).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "STANDARD".into()),
+        scale: t.fd(40, 1.0),
+        justification: t.i(70).unwrap_or(0).clamp(0, 2) as u8,
+        closed: flags & 2 != 0,
+        no_start_caps: flags & 4 != 0,
+        no_end_caps: flags & 8 != 0,
+        vertices: Vec::new(),
+    };
+    let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbMline").unwrap_or(0);
+    let mut cur: Option<cadcraft_doc::MLineVertex> = None;
+    let mut left = 0usize;
+    for tg in tags.iter().skip(start) {
+        if tg.code >= 1000 {
+            break;
+        }
+        match tg.code {
+            11 => {
+                if let Some(v) = cur.take()
+                    && m.vertices.len() < MAX
+                {
+                    m.vertices.push(v);
+                }
+                cur = Some(cadcraft_doc::MLineVertex { p: Vec2::new(tg.f64(), 0.0), dir: Vec2::X, miter: Vec2::Y, params: Vec::new() });
+            }
+            21 => cur.iter_mut().for_each(|v| v.p.y = tg.f64()),
+            12 => cur.iter_mut().for_each(|v| v.dir.x = tg.f64()),
+            22 => cur.iter_mut().for_each(|v| v.dir.y = tg.f64()),
+            13 => cur.iter_mut().for_each(|v| v.miter.x = tg.f64()),
+            23 => cur.iter_mut().for_each(|v| v.miter.y = tg.f64()),
+            74 => {
+                left = usize::try_from(tg.i64()).unwrap_or(0).min(MAX);
+                if let Some(v) = cur.as_mut()
+                    && v.params.len() < 10_000
+                {
+                    v.params.push(Vec::new());
+                }
+            }
+            41 if left > 0 => {
+                left -= 1;
+                if let Some(ps) = cur.as_mut().and_then(|v| v.params.last_mut()) {
+                    ps.push(tg.f64());
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(v) = cur.take() {
+        m.vertices.push(v);
+    }
+    for v in &mut m.vertices {
+        v.dir = v.dir.normalized();
+        v.miter = v.miter.normalized();
+        if !v.p.is_finite() || v.dir.len() < 0.5 {
+            v.dir = Vec2::X;
+        }
+        if v.miter.len() < 0.5 {
+            v.miter = v.dir.perp();
+        }
+        for ps in &mut v.params {
+            ps.retain(|x| x.is_finite());
+            if ps.is_empty() {
+                ps.push(0.0);
+            }
+        }
+    }
+    m
 }
 
 /// An ACAD_TABLE entity: sizes, cell texts and merges (DXF Reference), plus CADCraft's
@@ -1091,6 +1187,46 @@ fn resolve_image_paths(d: &mut Drawing, defs: &HashMap<String, String>) {
     }
 }
 
+/// VNCCad: an MLINESTYLE object.
+fn mline_style(tags: &[Tag]) -> cadcraft_doc::MLineStyle {
+    let t = T(tags);
+    let mut st = cadcraft_doc::MLineStyle {
+        name: t.s(2).unwrap_or_default(),
+        description: t.s(3).unwrap_or_default(),
+        start_angle: t.fd(51, 90.0),
+        end_angle: t.fd(52, 90.0),
+        elements: Vec::new(),
+        ..Default::default()
+    };
+    st.set_flags(t.i(70).unwrap_or(0));
+    // The fill colour comes before the elements (62 then 420), each element is 49, 62, 6.
+    let mut in_elems = false;
+    for tg in tags {
+        match tg.code {
+            71 => in_elems = true,
+            62 if !in_elems => st.fill_color = cadcraft_color::Color::from_aci(tg.i64().clamp(0, 257) as i16),
+            49 if in_elems && st.elements.len() < 16 => {
+                st.elements.push(cadcraft_doc::MLineElement { offset: tg.f64(), ..Default::default() });
+            }
+            62 if in_elems => {
+                if let Some(e) = st.elements.last_mut() {
+                    e.color = cadcraft_color::Color::from_aci(tg.i64().clamp(0, 257) as i16);
+                }
+            }
+            6 if in_elems => {
+                if let Some(e) = st.elements.last_mut() {
+                    e.linetype = tg.str();
+                }
+            }
+            _ => {}
+        }
+    }
+    if st.elements.is_empty() {
+        st.elements = cadcraft_doc::MLineStyle::default().elements;
+    }
+    st
+}
+
 /// Non-graphical objects applied once every entity is placed.
 #[derive(Default)]
 struct Objects {
@@ -1100,6 +1236,8 @@ struct Objects {
     xrecords: HashMap<String, Vec<Tag>>,
     /// TABLESTYLE objects: (handle, groups).
     table_styles: Vec<(String, Vec<Tag>)>,
+    /// VNCCad: MLINESTYLE objects.
+    mline_styles: Vec<Vec<Tag>>,
     /// DIMASSOC objects.
     dimassocs: Vec<Vec<Tag>>,
     /// VNCCad: GROUP objects: (handle, groups).
@@ -1152,6 +1290,7 @@ impl Objects {
                 self.xrecords.insert(h, tags.to_vec());
             }
             "TABLESTYLE" if self.table_styles.len() < MAX_OBJECTS => self.table_styles.push((h, tags.to_vec())),
+            "MLINESTYLE" if self.mline_styles.len() < 10_000 => self.mline_styles.push(tags.to_vec()),
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
             _ => {}
@@ -1159,6 +1298,17 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        // VNCCad: multiline styles.
+        for tags in &self.mline_styles {
+            let st = mline_style(tags);
+            if st.name.is_empty() {
+                continue;
+            }
+            match d.mline_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&st.name)) {
+                Some(x) => *x = st,
+                None => d.mline_styles.push(st),
+            }
+        }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };

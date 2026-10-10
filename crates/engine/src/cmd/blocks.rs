@@ -279,8 +279,13 @@ fn run_purge(s: &mut Session, _p: &Value) -> Result<Value> {
             || used_layers.contains(&l.name.to_ascii_lowercase())
     });
     let layers = before_l - d.layers.len();
-    let used_lt: std::collections::HashSet<String> =
-        all.iter().map(|e| e.common.linetype.to_ascii_lowercase()).chain(d.layers.iter().map(|l| l.linetype.to_ascii_lowercase())).collect();
+    let used_lt: std::collections::HashSet<String> = all
+        .iter()
+        .map(|e| e.common.linetype.to_ascii_lowercase())
+        .chain(d.layers.iter().map(|l| l.linetype.to_ascii_lowercase()))
+        // VNCCad: linetypes of multiline style elements.
+        .chain(d.mline_styles.iter().flat_map(|m| m.elements.iter().map(|e| e.linetype.to_ascii_lowercase())))
+        .collect();
     let before_t = d.linetypes.len();
     d.linetypes.retain(|l| {
         ["byblock", "bylayer", "continuous"].contains(&l.name.to_ascii_lowercase().as_str()) || used_lt.contains(&l.name.to_ascii_lowercase())

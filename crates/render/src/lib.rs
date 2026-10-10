@@ -10,6 +10,7 @@
 pub mod clip;
 mod dim;
 mod fill;
+pub mod gdt;
 mod hatch;
 mod linetype;
 pub mod paper;
@@ -591,6 +592,57 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o, o + u, o + u + v, o + v, o]);
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Tolerance(t) => {
+            let g = gdt::tolerance_geometry(ctx.d, t);
+            for l in &g.lines {
+                b.polyline(ctx, rgb, lw, l);
+            }
+            if b.opts.text {
+                b.shaped(ctx, rgb, lw, &g.text);
+            }
+        }
+        EntityKind::MLine(m) => {
+            // VNCCad: each element in its own colour and linetype; caps, miters and fill.
+            let st = ctx.d.mline_style(&m.style);
+            let g = m.geometry(st);
+            if b.opts.fill
+                && let Some(s) = st
+            {
+                let fc = match s.fill_color {
+                    Color::ByLayer | Color::ByBlock => rgb,
+                    c => c.resolve(Color::Index(7), Color::Index(7)),
+                };
+                for f in &g.fills {
+                    b.tris(ctx, fc, &fill::triangulate_evenodd(std::slice::from_ref(f)));
+                }
+            }
+            let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+            for (e, l) in &g.lines {
+                let el = st.and_then(|s| s.elements.get(*e));
+                let c = match el.map(|x| x.color) {
+                    Some(Color::Index(i)) => Color::Index(i).resolve(Color::Index(7), Color::Index(7)),
+                    Some(Color::True(t)) => t,
+                    _ => rgb,
+                };
+                let elt = match el.map(|x| x.linetype.trim().to_ascii_uppercase()) {
+                    Some(n) if !n.is_empty() && n != "BYLAYER" && n != "BYBLOCK" => ctx.d.linetype(&n).filter(|l| !l.pattern.is_empty()).cloned(),
+                    _ => lt.clone(),
+                };
+                match &elt {
+                    Some(x) => {
+                        for dash in linetype::apply(l, x, ltscale, min) {
+                            if dash.len() >= 2 {
+                                b.polyline(ctx, c, lw, &dash);
+                            }
+                        }
+                    }
+                    None => b.polyline(ctx, c, lw, l),
+                }
+            }
+            for cap in &g.caps {
+                b.polyline(ctx, rgb, lw, cap);
+            }
+        }
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
             stroke(b, &pts);

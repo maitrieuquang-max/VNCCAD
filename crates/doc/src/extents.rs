@@ -99,6 +99,7 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             }
             b
         }
+        EntityKind::Tolerance(t) => Bounds2::from_points(d.tolerance_outline(t)),
         EntityKind::Table(t) => {
             let w: f64 = t.col_widths.iter().sum();
             let h: f64 = t.row_heights.iter().sum();

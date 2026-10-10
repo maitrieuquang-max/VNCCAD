@@ -566,6 +566,10 @@ pub enum EntityKind {
     Image(Image),
     Wipeout(Wipeout),
     Table(Table),
+    /// VNCCad.
+    MLine(crate::MLine),
+    /// VNCCad.
+    Tolerance(crate::Tolerance),
     Unknown(Unknown),
 }
 
@@ -616,6 +620,8 @@ impl EntityKind {
             EntityKind::Image(_) => "Raster Image",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
+            EntityKind::MLine(_) => "Multiline",
+            EntityKind::Tolerance(_) => "Tolerance",
             EntityKind::Unknown(_) => "Proxy",
         }
     }
@@ -647,6 +653,8 @@ impl EntityKind {
             EntityKind::Image(_) => "IMAGE",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
+            EntityKind::MLine(_) => "MLINE",
+            EntityKind::Tolerance(_) => "TOLERANCE",
             EntityKind::Unknown(u) => u.dxf_type.as_str(),
         }
     }
@@ -723,6 +731,8 @@ impl EntityKind {
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
+            EntityKind::MLine(m) => m.geometry(None).lines.into_iter().map(|(_, l)| Prim::Seg(Segment::Line(GLine::new(l[0], l[1])))).collect(),
+            EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }
@@ -881,6 +891,14 @@ impl EntityKind {
                 t.row_heights.iter_mut().for_each(|h| *h *= s);
                 t.text_height *= s;
             }
+            EntityKind::MLine(ml) => ml.transform(m),
+            EntityKind::Tolerance(t) => {
+                t3(&mut t.insert);
+                // A mirrored frame keeps its direction (MIRRTEXT 0), like text.
+                if !mirror {
+                    t.dir = m.apply_vec(t.dir).normalized();
+                }
+            }
             EntityKind::Unknown(_) => {}
         }
     }
@@ -945,6 +963,8 @@ impl EntityKind {
             EntityKind::Image(i) => vec![i.insert.xy()],
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
+            EntityKind::MLine(m) => m.points(),
+            EntityKind::Tolerance(t) => vec![t.insert.xy()],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }

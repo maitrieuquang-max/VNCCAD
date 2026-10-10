@@ -116,7 +116,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mline", "Multiline", run_mline)
             .menu(&["Draw", "Multiline"])
             .alias(&["ml"])
-            .params("{points, scale?, justification?: top|zero|bottom, closed?} (two offset polylines)")
+            .params("{points, scale?, justification?: top|zero|bottom, closed?, style?: multiline style (default CMLSTYLE)}")
             .interactive(|s| Ok(Box::new(MlineM::new(s)))),
         CommandSpec::new("helix", "Helix", run_helix)
             .menu(&["Draw", "Helix"])
@@ -1888,26 +1888,20 @@ enum Just {
     Bottom,
 }
 
-fn mline_offsets(j: Just, scale: f64) -> [f64; 2] {
+fn just_code(j: Just) -> u8 {
     match j {
-        Just::Top => [0.0, -scale],
-        Just::Zero => [scale / 2.0, -scale / 2.0],
-        Just::Bottom => [scale, 0.0],
+        Just::Top => 0,
+        Just::Zero => 1,
+        Just::Bottom => 2,
     }
 }
 
-fn mline_kinds(pts: &[Vec2], closed: bool, j: Just, scale: f64) -> Vec<EntityKind> {
+/// VNCCad: a real multiline in the given style.
+fn mline_kinds(style: &cadcraft_doc::MLineStyle, pts: &[Vec2], closed: bool, j: Just, scale: f64) -> Vec<EntityKind> {
     if pts.len() < 2 {
         return Vec::new();
     }
-    let pl = Polyline::from_points(pts, closed);
-    mline_offsets(j, scale)
-        .iter()
-        .filter_map(|d| {
-            let vs = if d.abs() < 1e-15 { Some(pl.vertices.clone()) } else { super::modify::offset_polyline(&pl, *d) };
-            vs.map(|vs| lwpoly(vs, closed))
-        })
-        .collect()
+    vec![EntityKind::MLine(cadcraft_doc::MLine::build(pts, closed, style, scale, just_code(j)))]
 }
 
 fn just_of(s: &str) -> Option<Just> {
@@ -1942,8 +1936,12 @@ fn run_mline(s: &mut Session, p: &Value) -> Result<Value> {
         None => dj,
     };
     let scale = f64_or(p, "scale", ds);
+    let style = match str_param(p, "style") {
+        Some(n) => s.doc()?.mline_style(n).cloned().ok_or_else(|| bad("mline", format!("không có kiểu mline {n}")))?,
+        None => super::mltol::current_mline_style(s),
+    };
     let mut hs = Vec::new();
-    for k in mline_kinds(&pts, bool_or(p, "closed", false), j, scale) {
+    for k in mline_kinds(&style, &pts, bool_or(p, "closed", false), j, scale) {
         hs.push(s.add_entity(k)?.hex());
     }
     Ok(json!({ "handles": hs }))
@@ -1953,16 +1951,17 @@ struct MlineM {
     pts: Vec<Vec2>,
     just: Just,
     scale: f64,
-    asking: u8, // 0 none, 1 justification, 2 scale
+    asking: u8, // 0 none, 1 justification, 2 scale, 3 style
+    style: cadcraft_doc::MLineStyle,
 }
 
 impl MlineM {
     fn new(s: &Session) -> Self {
         let (just, scale) = mline_defaults(s);
-        MlineM { pts: Vec::new(), just, scale, asking: 0 }
+        MlineM { pts: Vec::new(), just, scale, asking: 0, style: super::mltol::current_mline_style(s) }
     }
     fn finish(&self, s: &mut Session, closed: bool) -> Result<Step> {
-        for k in mline_kinds(&self.pts, closed, self.just, self.scale) {
+        for k in mline_kinds(&self.style, &self.pts, closed, self.just, self.scale) {
             s.add_entity(k)?;
         }
         Ok(Step::Done)
@@ -1979,13 +1978,14 @@ impl Interactive for MlineM {
             Just::Zero => "Zero",
             Just::Bottom => "Bottom",
         };
-        s.echo(format!("Current settings: Justification = {j}, Scale = {:.2}, Style = STANDARD", self.scale));
+        s.echo(format!("Current settings: Justification = {j}, Scale = {:.2}, Style = {}", self.scale, self.style.name));
         Ok(Step::Continue)
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.asking {
             1 => return Prompt::new("Enter justification type", curves::KW).kw(&["Top", "Zero", "Bottom"]).default("top"),
             2 => return Prompt::new("Enter mline scale", Accept::NUMBER).default(format!("{:.2}", self.scale)),
+            3 => return Prompt::new("Enter mline style name", Accept::TEXT).default(self.style.name.clone()),
             _ => {}
         }
         match self.pts.len() {
@@ -2011,6 +2011,20 @@ impl Interactive for MlineM {
             self.asking = 0;
             return Ok(Step::Continue);
         }
+        if self.asking == 3 {
+            if let Input::Text(t) | Input::Keyword(t) = &i {
+                let found = s.doc()?.mline_style(t.trim()).cloned();
+                match found {
+                    Some(st) => {
+                        s.doc_mut()?.header.set_str("CMLSTYLE", &st.name);
+                        self.style = st;
+                    }
+                    None => s.echo(format!("Không có kiểu mline \"{}\".", t.trim())),
+                }
+            }
+            self.asking = 0;
+            return Ok(Step::Continue);
+        }
         if self.asking == 2 {
             if let Input::Text(t) = &i {
                 self.scale = number(t).filter(|v| v.is_finite()).ok_or_else(|| other("Requires a number."))?;
@@ -2028,7 +2042,7 @@ impl Interactive for MlineM {
                         self.pts.pop();
                     }
                     "Close" => return self.finish(s, true),
-                    _ => s.echo("Only the STANDARD multiline style is available."),
+                    _ => self.asking = 3,
                 }
                 Ok(Step::Continue)
             }
@@ -2054,7 +2068,7 @@ impl Interactive for MlineM {
         }
         let mut pts = self.pts.clone();
         pts.push(c);
-        mline_kinds(&pts, false, self.just, self.scale)
+        mline_kinds(&self.style, &pts, false, self.just, self.scale)
     }
 }
 

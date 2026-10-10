@@ -29,6 +29,7 @@ struct Needs {
     styles: Vec<String>,
     dimstyles: Vec<String>,
     blocks: Vec<String>,
+    mlstyles: Vec<String>,
 }
 
 fn push(v: &mut Vec<String>, n: &str) {
@@ -53,6 +54,8 @@ fn needs_of(e: &Entity, n: &mut Needs) {
                 push(&mut n.styles, &a.text.style);
             }
         }
+        EntityKind::MLine(m) => push(&mut n.mlstyles, &m.style),
+        EntityKind::Tolerance(t) => push(&mut n.dimstyles, &t.style),
         EntityKind::Dimension(d) => {
             push(&mut n.dimstyles, &d.style);
             if let Some(b) = &d.block {
@@ -85,6 +88,19 @@ pub fn import_defs(dst: &mut Drawing, src: &Drawing, ents: &[Entity]) {
             if let Some(r) = &b.dyn_ref {
                 push(&mut n.blocks, &r.source);
             }
+        }
+    }
+    for ms in &n.mlstyles {
+        if dst.mline_style(ms).is_none()
+            && let Some(x) = src.mline_style(ms)
+        {
+            for e in &x.elements {
+                let lt = e.linetype.to_ascii_uppercase();
+                if !matches!(lt.as_str(), "BYLAYER" | "BYBLOCK" | "CONTINUOUS" | "") {
+                    push(&mut n.linetypes, &e.linetype);
+                }
+            }
+            dst.mline_styles.push(x.clone());
         }
     }
     for l in &n.layers {

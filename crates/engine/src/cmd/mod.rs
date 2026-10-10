@@ -23,6 +23,7 @@ mod inquiry;
 mod layer;
 mod layout;
 pub mod lisp;
+pub mod mltol;
 mod modify;
 mod modify2;
 mod more;
@@ -32,6 +33,7 @@ mod qselect;
 pub mod raster;
 pub mod road;
 mod settings;
+mod sketch;
 mod table;
 pub mod ucs;
 mod utility;
@@ -200,6 +202,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audit::specs());
         v.extend(importdefs::specs());
         v.extend(constraints::specs());
+        v.extend(mltol::specs());
+        v.extend(sketch::specs());
         v
     })
 }

@@ -265,6 +265,13 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             v.height = h;
         }
         EntityKind::Wipeout(w) => *w.boundary.get_mut(index)? = to,
+        EntityKind::MLine(m) => {
+            let mut pts = m.points();
+            *pts.get_mut(index)? = to;
+            let off = m.offsets();
+            m.set_points(&pts, &off);
+        }
+        EntityKind::Tolerance(_) => return Some(translated(kind, delta)),
         EntityKind::Unknown(_) => return None,
     }
     Some(k)

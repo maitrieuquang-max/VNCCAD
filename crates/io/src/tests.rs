@@ -1311,3 +1311,75 @@ fn hatch_with_a_circle_edge_is_a_disc() {
     let area = cadcraft_geom::Polyline { vertices: l.vertices.clone(), closed: true }.area().abs();
     assert!((area - std::f64::consts::PI * 4.0).abs() < 0.01, "{area}");
 }
+
+/// VNCCad: wipeouts are saved (they used to be dropped) and come back the same way up;
+/// AutoCAD's two-corner rectangular boundary is read as a rectangle.
+#[test]
+fn wipeout_roundtrip_keeps_its_shape() {
+    let mut d = Drawing::new_metric();
+    let tri = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(0.0, 4.0)];
+    d.add(&Space::Model, Common::default(), EntityKind::Wipeout(Wipeout { boundary: tri.clone() })).unwrap();
+    let bytes = write(&d, "w.dxf").unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("AcDbWipeout"), "class and entity are written");
+    let back = read(&bytes, "w.dxf").unwrap();
+    let w = first(&back, |k| if let EntityKind::Wipeout(w) = k { Some(w.clone()) } else { None });
+    assert_eq!(w.boundary.len(), 3);
+    for (a, b) in w.boundary.iter().zip(&tri) {
+        assert!(a.dist(*b) < 1e-9, "{a:?} vs {b:?}");
+    }
+    // Through DWG too.
+    let dwg = write(&d, "w.dwg").unwrap();
+    let back = read(&dwg, "w.dwg").unwrap();
+    let w = first(&back, |k| if let EntityKind::Wipeout(w) = k { Some(w.clone()) } else { None });
+    assert!(w.boundary.iter().zip(&tri).all(|(a, b)| a.dist(*b) < 1e-6), "{:?}", w.boundary);
+}
+
+/// VNCCad: multilines keep their style, vertices and cuts; tolerances their frame text;
+/// both through DXF and DWG.
+#[test]
+fn mline_and_tolerance_roundtrip() {
+    let mut d = Drawing::new_metric();
+    let st = MLineStyle {
+        name: "TUONG220".into(),
+        description: "Tường 220".into(),
+        start_line: true,
+        end_line: true,
+        fill: true,
+        fill_color: cadcraft_color::Color::Index(8),
+        elements: vec![
+            MLineElement { offset: 110.0, color: cadcraft_color::Color::Index(1), linetype: "BYLAYER".into() },
+            MLineElement { offset: 0.0, color: cadcraft_color::Color::Index(3), linetype: "BYLAYER".into() },
+            MLineElement { offset: -110.0, ..Default::default() },
+        ],
+        ..MLineStyle::default()
+    };
+    d.mline_styles.push(st.clone());
+    let pts = [Vec2::new(0.0, 0.0), Vec2::new(5000.0, 0.0), Vec2::new(5000.0, 3000.0)];
+    let mut m = MLine::build(&pts, false, &st, 1.0, 1);
+    m.set_element_pieces(0, 1, &[(0.0, 1000.0), (2000.0, f64::MAX)]);
+    d.add(&Space::Model, Common::default(), EntityKind::MLine(m.clone())).unwrap();
+    let tol = cadcraft_doc::Tolerance {
+        insert: Vec3::new(100.0, 200.0, 0.0),
+        dir: Vec2::X,
+        text: "{\\Fgdt;j}%%v{\\Fgdt;n}0.05{\\Fgdt;m}%%vA%%vB".into(),
+        style: "ISO-25".into(),
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Tolerance(tol.clone())).unwrap();
+    for name in ["m.dxf", "m.dwg"] {
+        let bytes = write(&d, name).unwrap();
+        let back = read(&bytes, name).unwrap();
+        let s2 = back.mline_style("TUONG220").unwrap_or_else(|| panic!("{name}: style"));
+        assert_eq!(s2.elements.len(), 3, "{name}");
+        assert!((s2.elements[0].offset - 110.0).abs() < 1e-9 && s2.start_line && s2.end_line && s2.fill, "{name}: {s2:?}");
+        let m2 = first(&back, |k| if let EntityKind::MLine(m) = k { Some(m.clone()) } else { None });
+        assert_eq!(m2.style, "TUONG220", "{name}");
+        assert_eq!(m2.points(), m.points(), "{name}");
+        assert_eq!(m2.element_pieces(0, 1).len(), 2, "{name}: the cut survives");
+        let g = m2.geometry(Some(s2));
+        assert_eq!(g.lines.len(), 7, "{name}");
+        let t2 = first(&back, |k| if let EntityKind::Tolerance(t) = k { Some(t.clone()) } else { None });
+        assert_eq!(t2.text, tol.text, "{name}");
+        assert!(t2.insert.xy().dist(tol.insert.xy()) < 1e-9, "{name}");
+    }
+}

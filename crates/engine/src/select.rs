@@ -14,6 +14,7 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
         | EntityKind::Dimension(_)
         | EntityKind::AttDef(_)
         | EntityKind::Table(_)
+        | EntityKind::Tolerance(_)
         | EntityKind::MLeader(_)
         | EntityKind::Image(_) => {
             // Text-like objects are hit inside their box.
@@ -23,7 +24,7 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
             }
             let c = b.corners();
             let mut v = vec![vec![c[0], c[1], c[2], c[3], c[0]]];
-            if matches!(e.kind, EntityKind::Dimension(_) | EntityKind::Insert(_) | EntityKind::MLeader(_)) {
+            if matches!(e.kind, EntityKind::Dimension(_) | EntityKind::Insert(_) | EntityKind::MLeader(_) | EntityKind::Tolerance(_)) {
                 let list = cadcraft_render::build_entities(
                     d,
                     std::iter::once(e),
@@ -73,8 +74,10 @@ fn dist_to_polyline(pts: &[Vec2], p: Vec2) -> f64 {
 pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     let polys = hit_polylines(d, e, tol);
     let mut best = polys.iter().map(|pl| dist_to_polyline(pl, p)).fold(f64::INFINITY, f64::min);
-    let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Solid(_) | EntityKind::Table(_))
-        || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
+    let filled = matches!(
+        e.kind,
+        EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Solid(_) | EntityKind::Table(_) | EntityKind::Tolerance(_)
+    ) || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
     if filled && entity_bounds(d, e, 0).contains(p) {
         best = 0.0;
     }

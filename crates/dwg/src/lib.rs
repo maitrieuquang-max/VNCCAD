@@ -74,6 +74,49 @@ mod native {
         }
     }
 
+    /// VNCCad: acadrust's DXF reader skips MLINESTYLE flags (fill, caps, miters): take them
+    /// from the DXF text (ASCII, as VNCCad writes it).
+    fn fix_mline_style_flags(doc: &mut acadrust::CadDocument, dxf: &[u8]) {
+        let text = String::from_utf8_lossy(dxf);
+        let mut lines = text.lines();
+        let mut found: Vec<(String, i32)> = Vec::new();
+        let mut cur: Option<(String, i32)> = None;
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            match (code.trim(), value.trim()) {
+                ("0", v) => {
+                    found.extend(cur.take());
+                    if v == "MLINESTYLE" {
+                        cur = Some((String::new(), 0));
+                    }
+                }
+                ("2", v) => {
+                    if let Some(c) = cur.as_mut() {
+                        c.0 = v.to_string();
+                    }
+                }
+                ("70", v) => {
+                    if let Some(c) = cur.as_mut() {
+                        c.1 = v.parse().unwrap_or(0);
+                    }
+                }
+                _ => {}
+            }
+            if found.len() > 10_000 {
+                break;
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        for o in doc.objects.values_mut() {
+            if let acadrust::objects::ObjectType::MLineStyle(st) = o
+                && let Some((_, f)) = found.iter().find(|(n, _)| n.eq_ignore_ascii_case(&st.name))
+            {
+                st.flags = acadrust::objects::MLineStyleFlags::from_bits(*f);
+            }
+        }
+    }
+
     /// Convert DXF bytes into a DWG file.
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
         dxf_to_dwg_version(dxf, None)
@@ -86,6 +129,7 @@ mod native {
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
+        fix_mline_style_flags(&mut doc, dxf);
         if let Some(v) = version {
             let code = super::version_code(v).ok_or_else(|| format!("phiên bản DWG không hỗ trợ: {v} (2000, 2004, 2007, 2010, 2013, 2018)"))?;
             doc.version = acadrust::types::DxfVersion::parse(code).ok_or_else(|| format!("phiên bản DWG không hỗ trợ: {v}"))?;
