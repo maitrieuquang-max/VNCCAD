@@ -90,6 +90,8 @@ pub struct CanvasState {
     /// VNCCad: textures of raster images by file key (`None` = file missing or unreadable).
     pub images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     pub list: Option<DisplayList>,
+    /// VNCCad: the last cursor position sent to a tracking prompt (LISP grread).
+    pub last_motion: Option<Vec2>,
     key: (u64, u64, i32, bool, usize),
     /// Set when the app runs on wgpu: entities are drawn by [`crate::gpu`]; otherwise on the CPU.
     pub gpu: Option<crate::gpu::GpuTarget>,
@@ -617,6 +619,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let eff = effective_point(app, w, &xf);
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
+        // VNCCad: LISP grread follows the cursor.
+        if app.canvas.last_motion != Some(eff) && app.session.current_prompt().is_some_and(|p| p.track) {
+            app.canvas.last_motion = Some(eff);
+            if let Err(e) = app.session.input(cadcraft_engine::Input::Motion(eff)) {
+                app.session.echo(e.to_string());
+            }
+        }
     } else {
         app.canvas.cursor = None;
         app.canvas.snap = None;

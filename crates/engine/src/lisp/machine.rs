@@ -28,6 +28,7 @@ struct Snap {
     last_point: Vec2,
     log_len: usize,
     lisp: Lisp,
+    temp_vectors: Vec<(Vec2, Vec2, i16)>,
 }
 
 pub struct LispM {
@@ -55,6 +56,7 @@ impl LispM {
             last_point: s.last_point,
             log_len: s.log.len(),
             lisp: s.lisp.clone(),
+            temp_vectors: s.temp_vectors.clone(),
         })
     }
 
@@ -71,6 +73,7 @@ impl LispM {
         s.last_point = sn.last_point;
         s.log.truncate(sn.log_len);
         s.lisp = sn.lisp.clone();
+        s.temp_vectors = sn.temp_vectors.clone();
     }
 
     /// Run the job from the start with the inputs so far.
@@ -153,6 +156,11 @@ impl Interactive for LispM {
         if self.inputs.len() > 2000 {
             s.echo("; lỗi: quá nhiều lần nhập trong một lệnh LISP");
             return Ok(Step::Done);
+        }
+        // VNCCad: a run of cursor moves keeps only the latest (grread loops replay from the
+        // start on every input).
+        if matches!(i, Input::Motion(_)) && matches!(self.inputs.last(), Some(Input::Motion(_))) {
+            self.inputs.pop();
         }
         self.inputs.push(i);
         self.run(s)

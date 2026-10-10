@@ -275,3 +275,145 @@ pub fn tool_palette(app: &mut CadApp, ui: &mut egui::Ui) {
 pub fn tools_json(app: &mut CadApp) -> Value {
     serde_json::to_value(tools(app).clone()).unwrap_or(Value::Null)
 }
+
+// ============================================================================ Sheet sets
+
+/// Save `cmd`'s output: a file picked on the desktop, a download on the web.
+fn deliver(app: &mut CadApp, cmd: &str, name: &str) {
+    if let Some(pick) = app.services.pick_save.as_ref() {
+        if let Some(p) = pick(name) {
+            let _ = app.run(cmd, json!({ "path": p }));
+        }
+        return;
+    }
+    match app.session.execute(cmd, &json!({})) {
+        Ok(v) => {
+            let data = v.get("data").and_then(Value::as_str).unwrap_or("");
+            let bytes =
+                if cmd == "sheetset.save" { data.as_bytes().to_vec() } else { cadcraft_engine::cmd::file::base64_decode(data).unwrap_or_default() };
+            if let Some(m) = v.get("message").and_then(Value::as_str) {
+                app.session.echo(m.to_string());
+            }
+            if let Some(dl) = app.services.download.as_ref() {
+                dl(name, &bytes);
+            }
+        }
+        Err(e) => app.session.echo(e.to_string()),
+    }
+}
+
+pub fn sheet_manager(app: &mut CadApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(RichText::new("Bộ bản vẽ (Sheet Set)").size(14.0).color(t.text));
+    });
+    let list = app.session.execute("sheetset.list", &json!({})).unwrap_or(Value::Null);
+    let has = !list["name"].is_null();
+    let mut cmd: Option<(&str, Value)> = None;
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        if ui.small_button("Mới").clicked() {
+            cmd = Some(("sheetset.new", json!({ "name": "Bộ bản vẽ" })));
+        }
+        if ui.small_button("Mở…").on_hover_text("Mở tệp .vnss").clicked() {
+            cmd = Some(("ui.open.sheetset", Value::Null));
+        }
+        if has && ui.small_button("Lưu…").clicked() {
+            cmd = Some(("ui.save.sheetset", Value::Null));
+        }
+    });
+    if !has {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Chưa có bộ bản vẽ: bấm Mới, rồi thêm các layout làm tờ.").color(t.text_faint));
+        });
+    } else {
+        for (key, label) in [("name", "Tên bộ"), ("projectName", "Dự án"), ("projectNumber", "Mã dự án")] {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(RichText::new(label).color(t.text_dim));
+                let mut v = list[key].as_str().unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut v).desired_width(180.0)).lost_focus() && v != list[key].as_str().unwrap_or("") {
+                    cmd = Some(("sheetset.set", json!({ key: v })));
+                }
+            });
+        }
+        ui.separator();
+        let sheets = list["sheets"].as_array().cloned().unwrap_or_default();
+        egui::ScrollArea::vertical().id_salt("ss_list").max_height(ui.available_height() * 0.55).auto_shrink([false, true]).show(ui, |ui| {
+            for (i, sh) in sheets.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    let mut num = sh["number"].as_str().unwrap_or("").to_string();
+                    if ui.add(egui::TextEdit::singleline(&mut num).desired_width(44.0)).lost_focus() && num != sh["number"].as_str().unwrap_or("") {
+                        cmd = Some(("sheetset.set", json!({ "index": i, "number": num })));
+                    }
+                    let mut title = sh["title"].as_str().unwrap_or("").to_string();
+                    if ui.add(egui::TextEdit::singleline(&mut title).desired_width(130.0)).lost_focus() && title != sh["title"].as_str().unwrap_or("")
+                    {
+                        cmd = Some(("sheetset.set", json!({ "index": i, "title": title })));
+                    }
+                    let open = sh["open"].as_bool().unwrap_or(false);
+                    let tip = format!(
+                        "{} – {}{}",
+                        sh["file"].as_str().unwrap_or(""),
+                        sh["layout"].as_str().unwrap_or(""),
+                        if open { "" } else { " (chưa mở)" }
+                    );
+                    if ui.small_button(if open { "Mở" } else { "Mở*" }).on_hover_text(tip).clicked() {
+                        cmd = Some(("sheetset.open", json!({ "index": i })));
+                    }
+                    if i > 0 && ui.small_button("↑").clicked() {
+                        cmd = Some(("sheetset.move", json!({ "index": i, "to": i - 1 })));
+                    }
+                    if ui.small_button("✕").clicked() {
+                        cmd = Some(("sheetset.remove", json!({ "index": i })));
+                    }
+                });
+            }
+        });
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(8.0);
+            if ui.small_button("+ Layout hiện tại").clicked() {
+                cmd = Some(("sheetset.add", json!({})));
+            }
+            if ui.small_button("+ Mọi layout").on_hover_text("Mọi layout của bản vẽ đang vẽ").clicked() {
+                cmd = Some(("sheetset.add", json!({ "all": true })));
+            }
+            if ui.small_button("Đánh số lại").clicked() {
+                cmd = Some(("sheetset.renumber", json!({})));
+            }
+            if ui.small_button("Cập nhật khung tên").on_hover_text("Thuộc tính SO_TO, TEN_BAN_VE, TONG_SO_TO, DU_AN, MA_DU_AN…").clicked() {
+                cmd = Some(("sheetset.titleblocks", json!({})));
+            }
+            if ui.small_button("Chèn danh mục").on_hover_text("Bảng danh mục bản vẽ tại điểm chọn").clicked() {
+                cmd = Some(("ui.sheetset.table", Value::Null));
+            }
+            if ui.small_button("In PDF cả bộ").clicked() {
+                cmd = Some(("ui.publish.sheetset", Value::Null));
+            }
+        });
+    }
+    let Some((id, p)) = cmd else { return };
+    let name = list["name"].as_str().unwrap_or("Bo ban ve").to_string();
+    match id {
+        "ui.open.sheetset" => {
+            if let Some(req) = app.services.request_open.as_ref() {
+                req();
+            } else if let Some(path) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                app.open_path(&path);
+            }
+        }
+        "ui.save.sheetset" => deliver(app, "sheetset.save", &format!("{name}.vnss")),
+        "ui.publish.sheetset" => deliver(app, "sheetset.publish", &format!("{name}.pdf")),
+        "ui.sheetset.table" => app.start("sheetset.table"),
+        _ => {
+            if let Err(e) = app.run(id, p) {
+                app.session.echo(e);
+            }
+        }
+    }
+}

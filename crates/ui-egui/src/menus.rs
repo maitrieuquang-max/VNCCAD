@@ -198,8 +198,17 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             Ok(Value::Null)
         }
         // VNCCad: DesignCenter and Tool Palettes are tabs of the right palette.
-        "adcenter" | "toolpalettes" => {
-            let tab = if id == "adcenter" { 1 } else { 2 };
+        "sheetset.show" => {
+            app.ui.show_palettes = true;
+            app.ui.palette_tab = 3;
+            Ok(Value::Null)
+        }
+        "adcenter" | "toolpalettes" | "sheetset" | "ssm" => {
+            let tab = match id {
+                "adcenter" => 1,
+                "toolpalettes" => 2,
+                _ => 3,
+            };
             if app.ui.show_palettes && app.ui.palette_tab == tab {
                 app.ui.palette_tab = 0;
             } else {

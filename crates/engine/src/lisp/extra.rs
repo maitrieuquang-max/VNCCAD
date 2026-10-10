@@ -540,17 +540,36 @@ impl Run<'_> {
                 let _ = p;
                 V::Nil
             }),
-            "getfiled" => {
-                // No file dialog from a routine: the default name when given.
-                let def = match arg(a, 1) {
-                    V::Str(s) if !s.is_empty() => V::Str(s.clone()),
-                    _ => V::Nil,
+            "getfiled" => (|| {
+                // (getfiled title default ext flags): the file name is typed at the prompt.
+                let title = match arg(a, 0) {
+                    V::Str(t) => t.clone(),
+                    _ => "Tên tệp".into(),
                 };
-                if matches!(def, V::Nil) {
-                    self.print("\ngetfiled: VNCCad chưa có hộp thoại chọn tệp cho LISP; hãy truyền tên tệp mặc định.\n");
+                let def = match arg(a, 1) {
+                    V::Str(d) => d.clone(),
+                    _ => String::new(),
+                };
+                let ext = match arg(a, 2) {
+                    V::Str(e) if !e.is_empty() => e.trim_start_matches('.').to_string(),
+                    _ => String::new(),
+                };
+                let mut p = crate::Prompt::new(
+                    format!("{title} (gõ tên tệp{})", if ext.is_empty() { String::new() } else { format!(", .{ext}") }),
+                    crate::Accept::TEXT,
+                );
+                if !def.is_empty() {
+                    p = p.default(def.clone());
                 }
-                Ok(def)
-            }
+                Ok(match self.next_input(p)? {
+                    crate::Input::Text(t) | crate::Input::Keyword(t) if !t.trim().is_empty() => {
+                        let t = t.trim().trim_matches('"').to_string();
+                        if !ext.is_empty() && !t.contains('.') { V::Str(format!("{t}.{ext}")) } else { V::Str(t) }
+                    }
+                    _ if !def.is_empty() => V::Str(def),
+                    _ => V::Nil,
+                })
+            })(),
             "getenv" => s_arg(a, 0, name).map(|k| {
                 let key = k.to_ascii_lowercase();
                 if let Some(v) = self.lisp.cfg.get(&format!("env:{key}")) {
@@ -574,7 +593,22 @@ impl Run<'_> {
                 Ok(V::Str(v))
             })(),
             "vl-registry-read" | "vl-registry-write" | "vl-registry-delete" => Ok(V::Nil),
-            "startapp" | "menucmd" | "setview" | "grread" | "vl-get-resource" => Ok(V::Nil),
+            "startapp" | "menucmd" | "setview" | "vl-get-resource" => Ok(V::Nil),
+            "grread" => (|| {
+                // (grread [track] [allkeys] [cursor]): (5 pt) moved, (3 pt) picked, (2 code) key.
+                let mut p = crate::Prompt::new("", crate::Accept { point: true, number: true, text: true, select: false, enter: true });
+                p.track = arg(a, 0).truthy();
+                let i = self.next_input(p)?;
+                Ok(match i {
+                    crate::Input::Motion(w) => V::List(vec![V::Int(5), self.ucs_pt(w)]),
+                    crate::Input::Point(w) => V::List(vec![V::Int(3), self.ucs_pt(w)]),
+                    crate::Input::Text(t) | crate::Input::Keyword(t) => {
+                        let c = t.chars().next().map_or(13, |c| i64::from(u32::from(c)));
+                        V::List(vec![V::Int(2), V::Int(c)])
+                    }
+                    _ => V::List(vec![V::Int(2), V::Int(13)]),
+                })
+            })(),
             // -------------------------------------------------------- strings & lists
             "vl-string-position" => (|| {
                 let c = i_arg(a, 0, name)?;

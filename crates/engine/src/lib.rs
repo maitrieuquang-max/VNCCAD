@@ -360,6 +360,8 @@ pub struct Session {
     /// VNCCad: temporary vectors drawn by LISP (`grdraw`, `grvecs`): (from, to, colour index);
     /// cleared by `(redraw)`, REDRAW and REGEN.
     pub temp_vectors: Vec<(Vec2, Vec2, i16)>,
+    /// VNCCad: the open sheet set (Sheet Set Manager).
+    pub sheet_set: Option<cmd::sheetset::SheetSet>,
 }
 
 impl Default for Session {
@@ -401,6 +403,7 @@ impl Session {
             insert_next_open: false,
             clipboard_doc: None,
             temp_vectors: Vec::new(),
+            sheet_set: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -645,6 +648,10 @@ impl Session {
     /// Give an input to the running command. With no command running, `Enter` repeats the last
     /// command (as in AutoCAD) and points do nothing.
     pub fn input(&mut self, input: Input) -> Result<()> {
+        // VNCCad: cursor moves matter only to a tracking prompt (LISP grread).
+        if matches!(input, Input::Motion(_)) && !self.current_prompt().is_some_and(|p| p.track) {
+            return Ok(());
+        }
         if self.running.is_none() {
             if input == Input::Enter
                 && let Some(last) = self.last_command.clone()

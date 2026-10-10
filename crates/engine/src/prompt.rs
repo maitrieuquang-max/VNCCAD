@@ -40,11 +40,14 @@ pub struct Prompt {
     /// A DCL dialog to show instead of the command line (LISP `start_dialog`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dialog: Option<Box<crate::lisp::dcl::Pending>>,
+    /// VNCCad: the command wants every cursor move (`Input::Motion`) — LISP `(grread T)`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub track: bool,
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, dialog: None }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, dialog: None, track: false }
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
         self.keywords = k.iter().map(|s| s.to_string()).collect();
@@ -112,6 +115,8 @@ pub enum Input {
     Pick(Vec<Handle>),
     Enter,
     Cancel,
+    /// VNCCad: the cursor moved (sent only while the prompt is tracking: `grread`).
+    Motion(Vec2),
 }
 
 /// What happens after an input.

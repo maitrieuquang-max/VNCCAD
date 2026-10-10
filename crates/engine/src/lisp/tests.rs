@@ -498,3 +498,30 @@ fn activex_methods_and_collections() {
     assert!(ev(&mut s, "names").contains("TIM_DUONG"));
     assert_eq!(ev(&mut s, "(= (vla-get-lock l) :vlax-true)"), "T");
 }
+
+/// VNCCad: grread loops follow the cursor (rubber bands drawn with grdraw).
+#[test]
+fn grread_tracks_the_cursor() {
+    let mut s = Session::new();
+    ev(
+        &mut s,
+        "(defun c:vk (/ p gr) (setq p (getpoint \"Diem dau\")) \
+         (while (= 5 (car (setq gr (grread t 15 0)))) (redraw) (grdraw p (cadr gr) 1)) \
+         (redraw) (if (= 3 (car gr)) (entmake (list '(0 . \"LINE\") (cons 10 p) (cons 11 (cadr gr))))) (princ))",
+    );
+    s.start("vk").unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    assert!(s.current_prompt().unwrap().track);
+    for k in 1..=50 {
+        s.input(Input::Motion(Vec2::new(f64::from(k), 1.0))).unwrap();
+    }
+    assert_eq!(s.temp_vectors.len(), 1, "one rubber band, redrawn on every move");
+    assert_eq!(s.temp_vectors[0].1, Vec2::new(50.0, 1.0));
+    s.input(Input::Point(Vec2::new(10.0, 5.0))).unwrap();
+    assert!(s.running.is_none());
+    assert!(s.temp_vectors.is_empty());
+    let n = s.doc().unwrap().model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if l.b.x == 10.0)).count();
+    assert_eq!(n, 1);
+    // Moves outside grread are ignored.
+    s.input(Input::Motion(Vec2::new(1.0, 1.0))).unwrap();
+}

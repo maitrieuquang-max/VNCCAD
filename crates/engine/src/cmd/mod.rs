@@ -33,6 +33,7 @@ mod qselect;
 pub mod raster;
 pub mod road;
 mod settings;
+pub mod sheetset;
 mod sketch;
 mod table;
 pub mod ucs;
@@ -204,6 +205,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(constraints::specs());
         v.extend(mltol::specs());
         v.extend(sketch::specs());
+        v.extend(sheetset::specs());
         v
     })
 }

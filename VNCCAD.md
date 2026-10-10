@@ -123,6 +123,14 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | DesignCenter | `ADCENTER` (`ADC`, Ctrl+2) | Xem khối, lớp, kiểu đường, kiểu chữ, kiểu kích thước, kiểu MLINE của mọi bản vẽ đang mở; Chèn/Thêm vào bản vẽ đang vẽ (mang theo lớp, kiểu cần thiết) |
 | Bảng công cụ | `TOOLPALETTES` (`TP`) | Công cụ một chạm: hatch, lệnh, block (ghim từ DesignCenter); thêm/xóa/sắp xếp; nhớ giữa các lần mở |
 
+### Giai đoạn 9 – grread, bộ bản vẽ (Sheet Set)
+
+| Nhóm | Nội dung | Ghi chú |
+|---|---|---|
+| LISP kéo chuột | `grread` (theo dõi chuột: `(5 pt)`, bấm: `(3 pt)`, phím: `(2 mã)`) | Chạy được các vòng `(while (= 5 (car (grread t))) (redraw) (grdraw …))` vẽ dây cao su; nét tạm tự xóa khi lisp chạy lại |
+| `getfiled` | Hỏi tên tệp ở dòng lệnh (Enter = tên mặc định) | |
+| Bộ bản vẽ | `SHEETSET` (`SSM`, `BOBANVE`) – thẻ thứ 4 của bảng bên phải | Tạo bộ, thêm layout (của nhiều bản vẽ) làm tờ, sửa số tờ/tên tờ, sắp xếp, đánh số lại (tiền tố, số chữ số); mở tờ (chuyển bản vẽ và layout, desktop tự mở tệp); cập nhật khung tên (thuộc tính SO_TO, TEN_BAN_VE, TONG_SO_TO, DU_AN, MA_DU_AN…); chèn bảng danh mục bản vẽ; in cả bộ ra một PDF; lưu/mở tệp `.vnss` |
+
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
 Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:
@@ -146,7 +154,8 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
 - Block động: lưu file từ VNCCad giữ thuộc tính động cho VNCCad (bản ghi riêng), nhưng AutoCAD mở lại sẽ thấy block thường (các đối tượng tham số/hành động của AutoCAD không được ghi lại). Các tham số khác (Point, Polar, XY, Rotation, Lookup, Alignment) chưa hỗ trợ. Hành động Array trong file DWG có thể mất danh sách đối tượng khi đọc (giới hạn của bộ đọc DWG).
 - Multiline: chưa cắt/kéo dài được bằng TRIM/EXTEND (như AutoCAD, phải dùng MLEDIT); góc nắp khác 90° chưa vẽ nghiêng.
-- LISP: chưa có `grread` (vòng lặp kéo chuột) và hộp thoại `getfiled`; `startapp`, registry không dùng được.
+- LISP: `grread` chỉ báo phím theo cả dòng gõ (ký tự đầu), không theo từng phím; `startapp`, registry không dùng được.
+- Bộ bản vẽ: khung tên chỉ cập nhật trên các bản vẽ đang mở; in cả bộ bỏ qua tờ của bản vẽ chưa mở.
 - Reactor LISP không lưu cùng bản vẽ; chưa có `vlr-mouse-reactor`, `vlr-sysvar-reactor` (tạo được nhưng không phát sự kiện).
 
 ## Build

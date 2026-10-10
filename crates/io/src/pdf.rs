@@ -180,6 +180,18 @@ pub fn publish(d: &Drawing, sheets: &[(Space, PdfOptions)], compress: bool, titl
     Ok(assemble_pages(&pages, compress, title))
 }
 
+/// VNCCad: one PDF with pages from several drawings (a sheet set).
+pub fn publish_multi(sheets: &[(&Drawing, Space, PdfOptions)], compress: bool, title: &str) -> Result<Vec<u8>> {
+    if sheets.is_empty() {
+        return Err(IoError::Format("không có tờ nào để in".into()));
+    }
+    let mut pages = Vec::with_capacity(sheets.len());
+    for (d, space, o) in sheets.iter().take(1000) {
+        pages.push(plot_page(d, space, o)?);
+    }
+    Ok(assemble_pages(&pages, compress, title))
+}
+
 /// A raster image placed on a page.
 struct PdfImage {
     width: u32,

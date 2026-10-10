@@ -258,10 +258,14 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
         let tab_h = 30.0;
         p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), tab_h)), 0.0, t.chrome);
         // VNCCad: Layers + Properties, DesignCenter, Tool Palettes.
-        for (i, (icon, tip)) in
-            [(Icon::Layers, "Lớp và thuộc tính"), (Icon::Blocks, "DesignCenter (Ctrl+2)"), (Icon::Hatch, "Bảng công cụ (TOOLPALETTES)")]
-                .iter()
-                .enumerate()
+        for (i, (icon, tip)) in [
+            (Icon::Layers, "Lớp và thuộc tính"),
+            (Icon::Blocks, "DesignCenter (Ctrl+2)"),
+            (Icon::Hatch, "Bảng công cụ (TOOLPALETTES)"),
+            (Icon::Publish, "Bộ bản vẽ (SHEETSET)"),
+        ]
+        .iter()
+        .enumerate()
         {
             let br = Rect::from_center_size(pos2(r.left() + 30.0 + i as f32 * 52.0, r.top() + tab_h / 2.0), vec2(20.0, 20.0));
             let hit = br.expand2(vec2(14.0, 4.0));
@@ -278,6 +282,9 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
         let body = Rect::from_min_max(pos2(r.left(), r.top() + tab_h), r.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| match app.ui.palette_tab {
             1 => crate::toolpal::designcenter(app, ui),
+            3 => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| crate::toolpal::sheet_manager(app, ui));
+            }
             2 => {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| crate::toolpal::tool_palette(app, ui));
             }

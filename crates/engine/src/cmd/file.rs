@@ -135,6 +135,16 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(if new.is_empty() { format!("Đã nạp {fname}.") } else { format!("Đã nạp {fname}. Lệnh mới: {}", new.join(", ")) });
         return Ok(s.active);
     }
+    // VNCCad: a sheet set.
+    if lower_name.ends_with(".vnss") {
+        let text = String::from_utf8_lossy(bytes).to_string();
+        let r = super::sheetset::load_text(s, &text, path.clone())?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        s.ui_requests.push(("sheetset.show".into(), Value::Null));
+        return Ok(s.active);
+    }
     // VNCCad: data files for LISP routines (read with `open`).
     if [".txt", ".csv", ".dat", ".xyz", ".tsv"].iter().any(|e| lower_name.ends_with(e)) {
         let fname = file_name(name);

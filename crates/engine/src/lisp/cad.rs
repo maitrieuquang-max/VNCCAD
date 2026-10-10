@@ -323,7 +323,7 @@ impl Run<'_> {
     pub(super) fn to_world(&self, v: &V) -> Option<Vec2> {
         v.point().map(|p| self.ucs().to_world(p))
     }
-    fn ucs_pt(&self, w: Vec2) -> V {
+    pub(super) fn ucs_pt(&self, w: Vec2) -> V {
         let p = self.ucs().to_ucs(w);
         V::pt3(p.x, p.y, 0.0)
     }
@@ -338,7 +338,7 @@ impl Run<'_> {
     }
 
     /// Ask for a value. Keywords from `initget` are offered; bit 1 refuses a plain Enter.
-    fn ask(&mut self, prompt: Prompt) -> R<Input> {
+    pub(super) fn ask(&mut self, prompt: Prompt) -> R<Input> {
         let (bits, kws) = self.initget();
         let refs: Vec<&str> = kws.iter().map(String::as_str).collect();
         let prompt = if refs.is_empty() { prompt } else { prompt.kw(&refs) };
