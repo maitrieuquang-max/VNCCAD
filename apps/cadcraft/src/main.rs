@@ -62,6 +62,7 @@ fn services() -> Services {
                 )
                 .add_filter("Font SHX", &["shx"])
                 .add_filter("AutoLISP, DCL, Script", &["lsp", "dcl", "sld", "scr"])
+                .add_filter("Dữ liệu cho LISP (TXT, CSV)", &["txt", "csv", "dat", "xyz", "tsv"])
                 .add_filter("Ảnh, PDF nền", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"])
                 .add_filter("All files", &["*"])
                 .pick_file()
@@ -89,6 +90,15 @@ fn services() -> Services {
         autosave: autosave_store::store(),
         local_fonts: None,
         print_pdf: Some(Box::new(print_pdf)),
+        prefs_get: Some(Box::new(|k| autosave_store::pref_path(k).and_then(|p| std::fs::read_to_string(p).ok()))),
+        prefs_set: Some(Box::new(|k, v| {
+            if let Some(p) = autosave_store::pref_path(k) {
+                if let Some(d) = p.parent() {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                let _ = std::fs::write(p, v);
+            }
+        })),
     }
 }
 

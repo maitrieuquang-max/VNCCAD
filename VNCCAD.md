@@ -110,6 +110,19 @@ Giới hạn LISP: đối tượng ActiveX ngoài phần đã liệt kê ở Gia
 | Vẽ tay | `SKETCH` (`VETAY`) | Bấm hạ/nhấc bút, ghi theo chuột; kiểu Polyline/Spline/Line (SKPOLY), bước ghi |
 | Sửa lỗi | Lưu WIPEOUT | Wipeout (kể cả do TEXTMASK tạo) trước đây bị mất khi lưu; nay ghi đúng và đọc đúng chiều biên như AutoCAD |
 
+### Giai đoạn 8 – mở rộng AutoLISP/ActiveX, DesignCenter, bảng công cụ
+
+| Nhóm | Nội dung | Ghi chú |
+|---|---|---|
+| Tệp văn bản trong LISP | `open`, `close`, `read-line`, `write-line`, `read-char`, `write-char`, `princ`/`prin1`/`print` ra tệp | Xuất/nhập tọa độ cọc, bảng khối lượng ra CSV. Desktop ghi tệp thật; web: tệp .txt/.csv kéo vào được đọc theo tên, tệp ghi ra được tải xuống khi `close` |
+| Tệp, thư mục | `vl-file-delete/copy/rename/size/systime`, `vl-directory-files`, `vl-mkdir`, `vl-filename-base/extension/directory/mktemp`, `fnsplitl`, `findfile`, `getenv/setenv`, `getcfg/setcfg` | |
+| Bảng, từ điển | `tblnext`, `tblobjname`, `namedobjdict`, `dictsearch`, `dictnext`, `entmakex`, `regapp`, `layoutlist`, `textbox` | Lớp, kiểu đường, kiểu chữ, kiểu kích thước, block; nhóm, kiểu MLINE, layout |
+| Chuỗi, danh sách, số | `vl-string-position/translate/mismatch/elt`, `vl-sort-i`, `vl-member-if-not`, `vl-symbol-value`, `vl-catch-all-error-p/-message`, `boole`, `cvunit`, `snvalid`… | `=` so sánh được ký hiệu |
+| Đồ họa tạm | `grdraw`, `grvecs`, `(redraw)` | Nét tạm hiện trên màn hình đến REDRAW/REGEN |
+| ActiveX (vla) | `vla-Move/Copy/Rotate/ScaleEntity/Mirror/Offset/Explode/GetBoundingBox`, `vla-AddMText/AddArc/AddPoint/AddEllipse/InsertBlock/AddDimAligned/AddDimRotated`, `vlax-invoke(-method)`, `vlax-for`, tập hợp `Layers`… (`vla-Item`, `vla-Add`, `vla-get-Count`), thuộc tính lớp (Color, Lock, Freeze, LayerOn…), `:vlax-true/:vlax-false` | |
+| DesignCenter | `ADCENTER` (`ADC`, Ctrl+2) | Xem khối, lớp, kiểu đường, kiểu chữ, kiểu kích thước, kiểu MLINE của mọi bản vẽ đang mở; Chèn/Thêm vào bản vẽ đang vẽ (mang theo lớp, kiểu cần thiết) |
+| Bảng công cụ | `TOOLPALETTES` (`TP`) | Công cụ một chạm: hatch, lệnh, block (ghim từ DesignCenter); thêm/xóa/sắp xếp; nhớ giữa các lần mở |
+
 ### Kiểm thử với bản vẽ thật (DWG 2004, 22.000 đối tượng, ~11.000 block)
 
 Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Quốc lập (TArch/天正, chữ Trung, font SHX bigfont). Các lỗi tìm ra và đã sửa:
@@ -133,6 +146,7 @@ Thử với một bản vẽ mặt bằng nhà xưởng do đơn vị Trung Qu�
 - Phần lõi CADCraft vẫn đang ở giai đoạn phát triển sớm (xem `ROADMAP.md`). Nên lưu file thường xuyên.
 - Block động: lưu file từ VNCCad giữ thuộc tính động cho VNCCad (bản ghi riêng), nhưng AutoCAD mở lại sẽ thấy block thường (các đối tượng tham số/hành động của AutoCAD không được ghi lại). Các tham số khác (Point, Polar, XY, Rotation, Lookup, Alignment) chưa hỗ trợ. Hành động Array trong file DWG có thể mất danh sách đối tượng khi đọc (giới hạn của bộ đọc DWG).
 - Multiline: chưa cắt/kéo dài được bằng TRIM/EXTEND (như AutoCAD, phải dùng MLEDIT); góc nắp khác 90° chưa vẽ nghiêng.
+- LISP: chưa có `grread` (vòng lặp kéo chuột) và hộp thoại `getfiled`; `startapp`, registry không dùng được.
 - Reactor LISP không lưu cùng bản vẽ; chưa có `vlr-mouse-reactor`, `vlr-sysvar-reactor` (tạo được nhưng không phát sự kiện).
 
 ## Build

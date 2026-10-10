@@ -814,6 +814,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_list(&painter, &xf, &list, bg, false);
         }
     }
+    // VNCCad: LISP temporary vectors (grdraw, grvecs).
+    for (a, b, c) in &app.session.temp_vectors {
+        let rgb = cadcraft_color::Color::from_aci((*c).clamp(0, 255)).resolve(cadcraft_color::Color::Index(7), cadcraft_color::Color::Index(7));
+        painter.line_segment([xf.to_screen(*a), xf.to_screen(*b)], Stroke::new(1.0, color32(display_rgb(rgb, bg))));
+    }
     // Pending selection window.
     if let (Some(pw), Some(c)) = (app.session.pending_window, raw_world) {
         let a = xf.to_screen(pw.corner);

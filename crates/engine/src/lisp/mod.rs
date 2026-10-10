@@ -18,6 +18,7 @@
 mod builtins;
 mod cad;
 pub mod dcl;
+mod extra;
 pub mod machine;
 mod vla;
 pub mod vlr;
@@ -52,6 +53,8 @@ pub enum V {
     Subr(String),
     /// VNCCad: a reactor (`vlr-…`), by id.
     Vlr(u64),
+    /// VNCCad: an open text file (`open`), by id.
+    File(u64),
 }
 
 #[derive(Debug, PartialEq)]
@@ -127,6 +130,7 @@ impl V {
             V::Fun(_) => "USUBR",
             V::Subr(_) => "SUBR",
             V::Vlr(_) => "VLR-OBJECT",
+            V::File(_) => "FILE",
         }
     }
 }
@@ -226,6 +230,9 @@ fn write_v(out: &mut String, v: &V, quote: bool, sets: &HashMap<u64, Vec<Handle>
         }
         V::Vlr(id) => {
             let _ = write!(out, "#<VLR-Reactor {id:x}>");
+        }
+        V::File(id) => {
+            let _ = write!(out, "#<file {id:x}>");
         }
     }
 }
@@ -423,6 +430,13 @@ pub struct Lisp {
     pub dcl: Vec<(i64, Vec<(String, dcl::Tile)>)>,
     /// Reactors (`vlr-…`).
     pub reactors: Vec<vlr::Reactor>,
+    /// VNCCad: open text files (`open`) and the next id.
+    pub open_files: HashMap<u64, extra::LFile>,
+    pub next_file: u64,
+    /// VNCCad: `setcfg`/`setenv` values.
+    pub cfg: HashMap<String, String>,
+    /// VNCCad: `tblnext`/`dictnext` positions.
+    pub tbl_cursor: HashMap<String, usize>,
 }
 
 impl Lisp {
@@ -488,6 +502,8 @@ impl<'a> Run<'a> {
         }
         match name {
             "pi" => V::Real(std::f64::consts::PI),
+            ":vlax-true" => V::T,
+            ":vlax-false" | ":vlax-null" => V::Nil,
             "pause" => V::Str("\\".into()),
             _ => V::Nil,
         }
@@ -715,13 +731,15 @@ impl<'a> Run<'a> {
                 }
                 Ok(last)
             }
-            "foreach" => {
-                let Some(V::Sym(var)) = args.first() else { return Some(err("foreach: thiếu tên biến")) };
+            "foreach" | "vlax-for" => {
+                let Some(V::Sym(var)) = args.first() else { return Some(err(format!("{name}: thiếu tên biến"))) };
                 let list = match args.get(1).map(|c| self.eval(c)) {
                     Some(Ok(v)) => v,
                     Some(Err(e)) => return Some(Err(e)),
                     None => V::Nil,
                 };
+                // VNCCad: vlax-for walks a collection (objects of a space, layers…).
+                let list = if name == "vlax-for" { V::list(self.collection(&list).unwrap_or_default()) } else { list };
                 let items: Vec<V> = match &list {
                     V::Nil => Vec::new(),
                     V::List(v) => v.clone(),

@@ -25,6 +25,7 @@ pub mod parametric;
 pub mod quick;
 pub mod selftest;
 pub mod theme;
+pub mod toolpal;
 
 use std::sync::mpsc::Receiver;
 
@@ -62,6 +63,8 @@ pub struct UiState {
     pub start_tab: bool,
     pub dialog: Option<String>,
     pub history_lines: usize,
+    /// VNCCad: right palette tab: 0 layers + properties, 1 DesignCenter, 2 tool palette.
+    pub palette_tab: u8,
 }
 
 impl Default for UiState {
@@ -85,6 +88,7 @@ impl Default for UiState {
             start_tab: false,
             dialog: None,
             history_lines: 3,
+            palette_tab: 0,
         }
     }
 }
@@ -108,6 +112,9 @@ pub struct Services {
     pub local_fonts: Option<Box<dyn Fn()>>,
     /// VNCCad: print a PDF (name, bytes) on a printer; returns a message for the command line.
     pub print_pdf: Option<Box<dyn Fn(&str, &[u8]) -> Result<String, String>>>,
+    /// VNCCad: small preferences kept between runs (tool palette…): read and write by key.
+    pub prefs_get: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    pub prefs_set: Option<Box<dyn Fn(&str, &str)>>,
 }
 
 pub struct CadApp {
@@ -127,6 +134,13 @@ pub struct CadApp {
     pub frame_ms: f64,
     pub quit_requested: bool,
     pub autosave: autosave::AutosaveState,
+    /// VNCCad: tool palette (loaded from preferences on first use).
+    pub tools: Option<Vec<toolpal::ToolItem>>,
+    /// VNCCad: DesignCenter source drawing and category.
+    pub adc_doc: Option<usize>,
+    pub adc_kind: String,
+    /// VNCCad: the "add a command tool" fields.
+    pub new_tool: (String, String),
 }
 
 impl CadApp {
@@ -148,6 +162,10 @@ impl CadApp {
             frame_ms: 0.0,
             quit_requested: false,
             autosave: autosave::AutosaveState::default(),
+            tools: None,
+            adc_doc: None,
+            adc_kind: "blocks".into(),
+            new_tool: (String::new(), String::new()),
         }
     }
 
@@ -236,7 +254,8 @@ impl CadApp {
         let data = cadcraft_engine::cmd::file::base64_encode(bytes);
         let lower = name.to_ascii_lowercase();
         let font = [".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
-        let support = font || [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb"].iter().any(|e| lower.ends_with(e));
+        let support = font
+            || [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".txt", ".csv", ".dat", ".xyz", ".tsv"].iter().any(|e| lower.ends_with(e));
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
             self.set_status(e);
         } else if font {
@@ -256,7 +275,9 @@ impl CadApp {
         } else {
             let lower = path.to_ascii_lowercase();
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
-            let support = [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
+            let support = [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf", ".txt", ".csv", ".dat", ".xyz", ".tsv"]
+                .iter()
+                .any(|e| lower.ends_with(e));
             // A drawing inserted as a block (INSERT running) keeps the view.
             if !support && self.session.running.is_none() {
                 self.ui.start_tab = false;

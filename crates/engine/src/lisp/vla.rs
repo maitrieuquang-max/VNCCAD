@@ -406,6 +406,9 @@ impl Run<'_> {
         if n.starts_with("vlax-curve-") {
             return self.vlax_curve(&n, a);
         }
+        if let Some(r) = self.vla_extra(&n, a) {
+            return Some(r);
+        }
         let prop_of = |v: &V| -> Option<String> {
             match v {
                 V::Sym(s) => Some(s.clone()),

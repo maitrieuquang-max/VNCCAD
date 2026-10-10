@@ -135,6 +135,14 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(if new.is_empty() { format!("Đã nạp {fname}.") } else { format!("Đã nạp {fname}. Lệnh mới: {}", new.join(", ")) });
         return Ok(s.active);
     }
+    // VNCCad: data files for LISP routines (read with `open`).
+    if [".txt", ".csv", ".dat", ".xyz", ".tsv"].iter().any(|e| lower_name.ends_with(e)) {
+        let fname = file_name(name);
+        let text = crate::lisp::machine::decode_source(bytes);
+        s.lisp.files.insert(fname.to_ascii_lowercase(), text);
+        s.echo(format!("Đã nạp tệp dữ liệu {fname} (đọc bằng (open \"{fname}\" \"r\") trong LISP)."));
+        return Ok(s.active);
+    }
     if lower_name.ends_with(".sld") {
         let fname = file_name(name);
         crate::lisp::dcl::parse_slide(bytes).map_err(|m| bad("open", format!("{fname}: {m}")))?;

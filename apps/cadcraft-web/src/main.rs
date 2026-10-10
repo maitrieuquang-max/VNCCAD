@@ -269,7 +269,7 @@ mod web {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
         let Some(input) = document.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
         input.set_type("file");
-        input.set_accept(".dxf,.dwg,.shx,.lsp,.dcl,.sld,.scr,.ttf,.otf,.ttc,.ctb,.stb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
+        input.set_accept(".dxf,.dwg,.shx,.lsp,.dcl,.sld,.scr,.txt,.csv,.dat,.xyz,.tsv,.ttf,.otf,.ttc,.ctb,.stb,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.jgw,.pgw,.tfw,.wld,.pdf");
         let (inbox, ctx, picker) = (inbox.clone(), ctx.clone(), input.clone());
         input.set_multiple(true);
         let on_change = Closure::once_into_js(move || {
@@ -438,6 +438,12 @@ mod web {
                             autosave: autosave_store(),
                             local_fonts: Some(Box::new(move || local_cjk_font(&ib2, &ctx2))),
                             print_pdf: Some(Box::new(print_pdf)),
+                            prefs_get: Some(Box::new(|k| web_sys::window()?.local_storage().ok()??.get_item(&format!("vnccad-pref:{k}")).ok()?)),
+                            prefs_set: Some(Box::new(|k, v| {
+                                if let Some(st) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+                                    let _ = st.set_item(&format!("vnccad-pref:{k}"), v);
+                                }
+                            })),
                             ..Services::default()
                         };
                         let mut session = Session::new();

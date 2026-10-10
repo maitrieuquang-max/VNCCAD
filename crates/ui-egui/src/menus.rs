@@ -197,6 +197,27 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        // VNCCad: DesignCenter and Tool Palettes are tabs of the right palette.
+        "adcenter" | "toolpalettes" => {
+            let tab = if id == "adcenter" { 1 } else { 2 };
+            if app.ui.show_palettes && app.ui.palette_tab == tab {
+                app.ui.palette_tab = 0;
+            } else {
+                app.ui.show_palettes = true;
+                app.ui.palette_tab = tab;
+            }
+            Ok(Value::Null)
+        }
+        // VNCCad: a text file written by a LISP routine on the web: hand it to the browser.
+        "download" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("vnccad.txt").to_string();
+            let bytes = params.get("data").and_then(Value::as_str).and_then(cadcraft_engine::cmd::file::base64_decode).unwrap_or_default();
+            if let Some(dl) = app.services.download.as_ref() {
+                dl(&name, &bytes);
+                app.session.echo(format!("Đã tải xuống {name}."));
+            }
+            Ok(Value::Null)
+        }
         // Only interactive invocations (menu, toolbar, command line) pick a file; JSON calls with
         // parameters keep returning base64 `data` and never open a dialog.
         "printer" => {
@@ -469,6 +490,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd, Key::X), "cutclip"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.toggle.palettes"),
+        (sc(cmd, Key::Num2), "adcenter"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),

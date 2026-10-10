@@ -41,6 +41,15 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// VNCCad: where a preference (`key` made of letters, digits, `-`, `_`) is kept: next to the
+/// autosave folder.
+pub fn pref_path(key: &str) -> Option<PathBuf> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return None;
+    }
+    Some(dir()?.parent()?.join("prefs").join(format!("{key}.json")))
+}
+
 pub fn store() -> Option<AutosaveStore> {
     let dir = dir()?;
     let run_tag = format!("{}p{}", now_ms() as u64, std::process::id());

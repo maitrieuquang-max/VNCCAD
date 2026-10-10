@@ -54,6 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pan.down", "Pan Down", |s, _| pan_frac(s, Vec2::new(0.0, -0.25))).menu(&["View", "Pan", "Down"]).noundo().transparent(),
         CommandSpec::new("regen", "Regen", |s, _| {
             s.touch();
+            s.temp_vectors.clear();
             Ok(json!({"message": "Regenerating model."}))
         })
         .menu(&["View", "Regen"])
@@ -61,6 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .noundo(),
         CommandSpec::new("regenall", "Regen All", |s, _| {
             s.touch();
+            s.temp_vectors.clear();
             Ok(json!({"message": "Regenerating all viewports."}))
         })
         .menu(&["View", "Regen All"])
@@ -68,6 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .noundo(),
         CommandSpec::new("redraw", "Redraw", |s, _| {
             s.touch();
+            s.temp_vectors.clear();
             ok()
         })
         .menu(&["View", "Redraw"])

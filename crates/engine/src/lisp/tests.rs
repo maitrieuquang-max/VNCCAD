@@ -396,3 +396,105 @@ fn dcl_images_and_slides() {
     assert!((last.2 - x2).abs() < 1e-3 && (last.3 - y2).abs() < 1e-3, "{lines:?}");
     s.cancel();
 }
+
+/// VNCCad: text files, file names, tables and dictionaries, strings, temporary vectors.
+#[test]
+fn files_tables_and_more() {
+    let mut s = Session::new();
+    let dir = std::env::temp_dir().join(format!("vnccad_lisp_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("toado.csv").to_string_lossy().replace('\\', "/");
+    // Export coordinates the way survey routines do, then read them back.
+    let src = format!(
+        "(setq f (open \"{path}\" \"w\")) (write-line \"STT,X,Y\" f) \
+         (foreach p '((1 100.5 200.25) (2 110.0 205.0)) (write-line (strcat (itoa (car p)) \",\" (rtos (cadr p) 2 3) \",\" (rtos (caddr p) 2 3)) f)) \
+         (princ \"cuoi\" f) (close f)"
+    );
+    ev(&mut s, &src);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "STT,X,Y\n1,100.500,200.250\n2,110.000,205.000\ncuoi");
+    let n = ev(
+        &mut s,
+        &format!(
+            "(setq f (open \"{path}\" \"r\") n 0) (read-line f) (while (setq l (read-line f)) (if (vl-string-search \",\" l) (setq n (1+ n)))) (close f) n"
+        ),
+    );
+    assert_eq!(n, "2");
+    ev(&mut s, &format!("(setq f (open \"{path}\" \"a\")) (write-line \"\" f) (write-char 65 f) (close f)"));
+    assert!(std::fs::read_to_string(&path).unwrap().ends_with("cuoi\nA"));
+    assert_eq!(ev(&mut s, &format!("(open \"{path}.khong\" \"r\")")), "nil");
+    assert_eq!(ev(&mut s, &format!("(vl-filename-base \"{path}\")")), "\"toado\"");
+    assert_eq!(ev(&mut s, &format!("(vl-filename-extension \"{path}\")")), "\".csv\"");
+    assert_eq!(ev(&mut s, "(fnsplitl \"C:/du an/cau.dwg\")"), "(\"C:/du an/\" \"cau\" \".dwg\")");
+    assert!(ev(&mut s, &format!("(vl-file-size \"{path}\")")).parse::<i64>().unwrap() > 20);
+    assert_eq!(ev(&mut s, &format!("(vl-directory-files \"{}\" \"*.csv\" -1)", dir.to_string_lossy().replace('\\', "/"))), "(\"toado.csv\")");
+    assert_eq!(ev(&mut s, &format!("(vl-file-delete \"{path}\")")), "T");
+    let _ = std::fs::remove_dir_all(&dir);
+    // A data file given to the app (dropped / opened; how the web reads files).
+    s.execute("open", &json!({ "data": crate::cmd::file::base64_encode("KM0,0\nKM1,1000\n".as_bytes()), "name": "coc.csv" })).unwrap();
+    assert_eq!(ev(&mut s, "(setq f (open \"coc.csv\" \"r\")) (read-line f)"), "\"KM0,0\"");
+    assert_eq!(ev(&mut s, "(read-char f)"), "75");
+    ev(&mut s, "(close f)");
+    // Tables and dictionaries.
+    s.execute("layer.new", &json!({ "name": "COC" })).unwrap();
+    assert_eq!(ev(&mut s, "(cdr (assoc 2 (tblnext \"LAYER\" T)))"), "\"0\"");
+    let mut names = Vec::new();
+    while let Some(n) = Some(ev(&mut s, "(cdr (assoc 2 (tblnext \"LAYER\")))")).filter(|n| n != "nil") {
+        names.push(n);
+    }
+    assert!(names.contains(&"\"COC\"".to_string()), "{names:?}");
+    assert_eq!(ev(&mut s, "(cdr (assoc 2 (entget (tblobjname \"LAYER\" \"COC\"))))"), "\"COC\"");
+    assert_eq!(ev(&mut s, "(cdr (assoc 0 (dictsearch (namedobjdict) \"ACAD_MLINESTYLE\")))"), "\"DICTIONARY\"");
+    assert_eq!(
+        ev(&mut s, "(cdr (assoc 2 (dictsearch (cdr (assoc -1 (dictsearch (namedobjdict) \"ACAD_MLINESTYLE\"))) \"STANDARD\")))"),
+        "\"STANDARD\""
+    );
+    // Strings, lists, numbers.
+    assert_eq!(ev(&mut s, "(vl-string-position (ascii \"+\") \"Km1+250\")"), "3");
+    assert_eq!(ev(&mut s, "(vl-string-translate \",\" \".\" \"12,5\")"), "\"12.5\"");
+    assert_eq!(ev(&mut s, "(vl-string-mismatch \"VNCCad\" \"VNC-KL\")"), "3");
+    assert_eq!(ev(&mut s, "(vl-sort-i '(30 10 20) '<)"), "(1 2 0)");
+    assert_eq!(ev(&mut s, "(boole 6 12 10)"), "6");
+    assert_eq!(ev(&mut s, "(boole 1 12 10)"), "8");
+    assert_eq!(ev(&mut s, "(cvunit 1 \"km\" \"m\")"), "1000.0");
+    assert_eq!(ev(&mut s, "(cvunit 2 \"ha\" \"sq m\")"), "20000.0");
+    assert_eq!(ev(&mut s, "(snvalid \"COC/D600\")"), "nil");
+    assert_eq!(ev(&mut s, "(vl-catch-all-error-p (setq r (vl-catch-all-apply '/ '(1 0))))"), "T");
+    assert!(ev(&mut s, "(vl-catch-all-error-message r)").starts_with('"'));
+    // Temporary vectors.
+    ev(&mut s, "(grdraw '(0 0) '(10 10) 1) (grvecs '(2 (0 0) (5 0) (5 0) (5 5)))");
+    assert_eq!(s.temp_vectors.len(), 3);
+    ev(&mut s, "(redraw)");
+    assert!(s.temp_vectors.is_empty());
+    // textbox and entmakex.
+    let tb = ev(&mut s, "(textbox '((1 . \"ABC\") (40 . 2.5)))");
+    assert!(tb.starts_with("(("), "{tb}");
+    assert!(ev(&mut s, "(entmakex '((0 . \"LINE\") (10 0 0 0) (11 5 5 0)))").starts_with("<Entity name"));
+}
+
+/// VNCCad: ActiveX methods, collections and layer objects.
+#[test]
+fn activex_methods_and_collections() {
+    let mut s = Session::new();
+    ev(&mut s, "(vl-load-com) (setq doc (vla-get-activedocument (vlax-get-acad-object)) ms (vla-get-modelspace doc))");
+    ev(&mut s, "(setq pl (vlax-ename->vla-object (entmakex '((0 . \"LWPOLYLINE\") (90 . 4) (70 . 1) (10 0 0) (10 10 0) (10 10 10) (10 0 10)))))");
+    ev(&mut s, "(vla-move pl (vlax-3d-point 0 0) (vlax-3d-point 5 0))");
+    assert_eq!(ev(&mut s, "(car (vla-get-coordinates pl))"), "5.0");
+    ev(&mut s, "(vlax-invoke pl 'Move '(0 0 0) '(0 5 0))");
+    ev(&mut s, "(vla-getboundingbox pl 'lo 'hi)");
+    assert_eq!(ev(&mut s, "(list (car lo) (cadr lo) (car hi) (cadr hi))"), "(5.0 5.0 15.0 15.0)");
+    let off = ev(&mut s, "(vla-get-area (car (vla-offset pl 1)))");
+    assert_eq!(off, "144.0", "positive offset of a closed shape goes outside");
+    assert_eq!(ev(&mut s, "(length (vla-explode pl))"), "4");
+    assert!(ev(&mut s, "(vla-get-objectname pl)").contains("Polyline"), "the original stays");
+    ev(&mut s, "(setq n 0) (vlax-for o ms (setq n (1+ n)))");
+    assert_eq!(ev(&mut s, "n"), ev(&mut s, "(vla-get-count ms)"));
+    // Layers through the collection.
+    ev(&mut s, "(setq lays (vla-get-layers doc) l (vla-add lays \"TIM_DUONG\"))");
+    ev(&mut s, "(vla-put-color l 1) (vla-put-lock l :vlax-true)");
+    assert_eq!(ev(&mut s, "(vla-get-name (vla-item lays \"TIM_DUONG\"))"), "\"TIM_DUONG\"");
+    let lay = s.doc().unwrap().layer("TIM_DUONG").unwrap().clone();
+    assert!(lay.locked && lay.color == cadcraft_color::Color::Index(1));
+    ev(&mut s, "(setq names nil) (vlax-for x lays (setq names (cons (vla-get-name x) names)))");
+    assert!(ev(&mut s, "names").contains("TIM_DUONG"));
+    assert_eq!(ev(&mut s, "(= (vla-get-lock l) :vlax-true)"), "T");
+}

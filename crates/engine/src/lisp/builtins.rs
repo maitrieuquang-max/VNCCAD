@@ -90,6 +90,10 @@ fn arith(a: &[V], f: &str, op: char) -> R<V> {
 fn cmp_vals(a: &V, b: &V) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (V::Str(x), V::Str(y)) => Some(x.cmp(y)),
+        // Symbols, T and entity names compare equal to themselves (as `=` does in AutoLISP).
+        (V::T, V::T) => Some(std::cmp::Ordering::Equal),
+        (V::Sym(x), V::Sym(y)) if x == y => Some(std::cmp::Ordering::Equal),
+        (V::Ename(x), V::Ename(y)) if x == y => Some(std::cmp::Ordering::Equal),
         _ => a.num()?.partial_cmp(&b.num()?),
     }
 }
@@ -232,6 +236,9 @@ impl Run<'_> {
             return r;
         }
         if let Some(r) = self.vlr(name, &a) {
+            return r;
+        }
+        if let Some(r) = self.extra(name, &a) {
             return r;
         }
         err(format!("không có hàm: {}", name.to_ascii_uppercase()))
@@ -619,19 +626,20 @@ impl Run<'_> {
                 }
                 _ => err("set: cần ký hiệu"),
             },
-            "vl-load-com" | "vl-load-reactors" | "textscr" | "graphscr" | "redraw" | "gc" => Ok(V::Nil),
+            "vl-load-com" | "vl-load-reactors" | "textscr" | "graphscr" | "gc" => Ok(V::Nil),
             "exit" | "quit" => Err(Ex::Quit),
             "*error*" => Ok(V::Nil),
             // Output.
             "princ" | "prin1" | "print" => {
                 let Some(v) = a.first() else { return Some(Ok(V::Sym(String::new()))) };
                 let text = to_text(v, name != "princ", &self.lisp.sets);
-                if name == "print" {
-                    self.print("\n");
-                }
-                self.print(&text);
-                if name == "print" {
-                    self.print(" ");
+                let text = if name == "print" { format!("\n{text} ") } else { text };
+                // VNCCad: to a file when one is given.
+                if let Some(f) = a.get(1).filter(|f| matches!(f, V::File(_))) {
+                    let f = f.clone();
+                    self.file_write(&f, &text);
+                } else {
+                    self.print(&text);
                 }
                 Ok(v.clone())
             }

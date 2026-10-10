@@ -357,6 +357,9 @@ pub struct Session {
     pub insert_next_open: bool,
     /// VNCCad: the drawing the clipboard objects came from (blocks, layers, styles to bring along).
     pub clipboard_doc: Option<Arc<Drawing>>,
+    /// VNCCad: temporary vectors drawn by LISP (`grdraw`, `grvecs`): (from, to, colour index);
+    /// cleared by `(redraw)`, REDRAW and REGEN.
+    pub temp_vectors: Vec<(Vec2, Vec2, i16)>,
 }
 
 impl Default for Session {
@@ -397,6 +400,7 @@ impl Session {
             audit_next_open: false,
             insert_next_open: false,
             clipboard_doc: None,
+            temp_vectors: Vec::new(),
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {

@@ -320,7 +320,7 @@ impl Run<'_> {
         self.s.ucs()
     }
     /// A LISP point (UCS) → world.
-    fn to_world(&self, v: &V) -> Option<Vec2> {
+    pub(super) fn to_world(&self, v: &V) -> Option<Vec2> {
         v.point().map(|p| self.ucs().to_world(p))
     }
     fn ucs_pt(&self, w: Vec2) -> V {
@@ -525,11 +525,19 @@ impl Run<'_> {
                 _ => Ok(V::Nil),
             },
             "entget" => match arg(a, 0) {
-                V::Ename(h) => Ok(self.s.doc().ok().and_then(|d| entget(d, *h)).unwrap_or(V::Nil)),
+                V::Ename(h) => Ok(self.pseudo_entget(*h).or_else(|| self.s.doc().ok().and_then(|d| entget(d, *h))).unwrap_or(V::Nil)),
                 _ => err("entget: cần tên đối tượng"),
             },
             "entmod" => self.entmod(arg(a, 0)),
             "entmake" => self.entmake(arg(a, 0)),
+            "entmakex" => match self.entmake(arg(a, 0)) {
+                Ok(V::Nil) => Ok(V::Nil),
+                Ok(_) => {
+                    let space = self.s.space();
+                    Ok(self.s.doc().ok().and_then(|d| d.space(&space)?.last().map(|e| V::Ename(e.handle))).unwrap_or(V::Nil))
+                }
+                Err(e) => Err(e),
+            },
             "entdel" => match arg(a, 0) {
                 V::Ename(h) => {
                     let h = *h;
@@ -661,11 +669,6 @@ impl Run<'_> {
                 _ => Ok(V::Nil),
             },
             "load" => self.load(a),
-            "findfile" => match arg(a, 0) {
-                V::Str(f) => Ok(if self.lisp.files.contains_key(&f.to_ascii_lowercase()) { V::Str(f.clone()) } else { V::Nil }),
-                _ => Ok(V::Nil),
-            },
-            "getenv" | "setenv" => Ok(V::Nil),
             "ver" => Ok(V::Str("Visual LISP 2.0 (VNCCad)".into())),
             "acad_strlsort" => {
                 let mut v: Vec<String> =
@@ -724,7 +727,7 @@ impl Run<'_> {
         }
     }
 
-    fn tblsearch(&self, table: &str, name: &str) -> V {
+    pub(super) fn tblsearch(&self, table: &str, name: &str) -> V {
         let Ok(d) = self.s.doc() else { return V::Nil };
         match table.to_ascii_uppercase().as_str() {
             "LAYER" => d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(name)).map_or(V::Nil, |l| {
