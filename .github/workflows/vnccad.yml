@@ -66,7 +66,17 @@ jobs:
         run: |
           (cd "$GITHUB_WORKSPACE/site" && python3 -m http.server 8080 >/dev/null 2>&1 &)
           sleep 2
-          node selftest.mjs http://localhost:8080/
+          set -o pipefail
+          node selftest.mjs http://localhost:8080/ | tee selftest.log
+      - name: Report the self test
+        if: always()
+        working-directory: packaging/web
+        run: |
+          # Annotations show on the run page (and through the API) without opening the log.
+          grep -E "SELFTEST|elapsed|busy|pageerror" selftest.log | head -20 | while IFS= read -r line; do
+            echo "::notice title=Web self test::${line}"
+          done
+          { echo '### Web self test'; echo '```'; grep -E "SELFTEST|elapsed|busy|PASSED|FAILED" selftest.log; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
