@@ -2,14 +2,19 @@
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
 mod annotate;
+pub mod assocarray;
+mod audit;
 pub mod bedit;
 mod blocks;
+mod blocktools;
 pub mod constraints;
 mod draw;
 mod draw2;
 pub mod dynblock;
 mod edit;
+pub mod fields;
 pub mod file;
+pub mod flow;
 mod gripcmds;
 pub mod group;
 mod hatch;
@@ -19,6 +24,7 @@ mod layout;
 pub mod lisp;
 mod modify;
 mod modify2;
+mod more;
 mod props;
 pub mod publish;
 mod qselect;
@@ -186,6 +192,11 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(road::specs());
         v.extend(table::specs());
         v.extend(dynblock::specs());
+        v.extend(more::specs());
+        v.extend(assocarray::specs());
+        v.extend(blocktools::specs());
+        v.extend(fields::specs());
+        v.extend(audit::specs());
         v.extend(constraints::specs());
         v
     })

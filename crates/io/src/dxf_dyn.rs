@@ -61,6 +61,9 @@ impl DynObjects {
                 }
                 self.dicts.insert(h, entries);
             }
+            "SPATIAL_FILTER" if self.objs.len() < MAX => {
+                self.objs.insert(h, (kind.to_string(), tags.to_vec()));
+            }
             k if ((k.starts_with("BLOCK") && (k.ends_with("PARAMETER") || k.ends_with("ACTION"))) || k == "ACDB_BLOCKREPRESENTATION_DATA")
                 && self.objs.len() < MAX =>
             {
@@ -235,7 +238,7 @@ pub(crate) fn apply(
     xrecords: &HashMap<String, Vec<Tag>>,
     br_xdict: &HashMap<String, String>,
     br_handles: &HashMap<String, String>,
-    insert_xdict: &[(String, String)],
+    insert_xdict: &[(String, String, Handle)],
 ) {
     if objs.objs.is_empty() {
         return;
@@ -270,7 +273,7 @@ pub(crate) fn apply(
     }
     // References: the anonymous block an INSERT uses, its definition and values.
     let mut refs: HashMap<String, DynRef> = HashMap::new();
-    for (xd, bname) in insert_xdict {
+    for (xd, bname, _) in insert_xdict {
         if refs.contains_key(bname) || defs.contains_key(bname) {
             continue;
         }
@@ -297,5 +300,40 @@ pub(crate) fn apply(
         {
             Arc::make_mut(b).dyn_ref = Some(r);
         }
+    }
+}
+
+/// VNCCad: XCLIP boundaries (INSERT → `ACAD_FILTER` → `SPATIAL` → SPATIAL_FILTER). The points
+/// are mapped to block coordinates by the filter's inverse insert matrix (4×3, column-major).
+pub(crate) fn apply_clips(d: &mut Drawing, objs: &DynObjects, insert_xdict: &[(String, String, Handle)]) {
+    for (xd, _, h) in insert_xdict {
+        let Some(fd) = objs.entry(xd, "ACAD_FILTER") else { continue };
+        let Some(sf) = objs.entry(fd, "SPATIAL") else { continue };
+        let Some((kind, tags)) = objs.objs.get(sf) else { continue };
+        if kind != "SPATIAL_FILTER" {
+            continue;
+        }
+        let t = section(tags, "AcDbSpatialFilter");
+        let n = t.iter().find(|x| x.code == 70).map(Tag::i64).unwrap_or(0).clamp(0, 100_000) as usize;
+        let xs: Vec<f64> = t.iter().filter(|x| x.code == 10).map(Tag::f64).take(n).collect();
+        let ys: Vec<f64> = t.iter().filter(|x| x.code == 20).map(Tag::f64).take(n).collect();
+        let pts: Vec<Vec2> = xs.iter().zip(&ys).map(|(x, y)| Vec2::new(*x, *y)).filter(|p| p.is_finite()).collect();
+        if pts.len() < 2 {
+            continue;
+        }
+        let m: Vec<f64> = t.iter().filter(|x| x.code == 40).map(Tag::f64).collect();
+        let pts = match m.get(0..12) {
+            Some(v) if v.iter().all(|x| x.is_finite()) => {
+                // Columns: (a b ·) (c d ·) (· · ·) (e f ·).
+                let (a, b, c, dd, e, f) = (v[0], v[1], v[3], v[4], v[9], v[10]);
+                pts.iter().map(|p| Vec2::new(a * p.x + c * p.y + e, b * p.x + dd * p.y + f)).collect()
+            }
+            _ => pts,
+        };
+        let _ = d.modify_entity(*h, |e| {
+            if let cadcraft_doc::EntityKind::Insert(i) = &mut e.kind {
+                i.clip = Some(pts);
+            }
+        });
     }
 }

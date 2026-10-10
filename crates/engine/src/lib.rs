@@ -348,6 +348,10 @@ pub struct Session {
     /// VNCCad: binary support files given to the app (slides `.sld` for DCL images), by
     /// lower-case file name.
     pub binary_files: std::collections::HashMap<String, Vec<u8>>,
+    /// VNCCad: milliseconds since 1970 (date fields). The web host sets a local-time clock.
+    pub clock: Option<fn() -> f64>,
+    /// VNCCad: RECOVER from the UI: audit and fix the next drawing opened.
+    pub audit_next_open: bool,
 }
 
 impl Default for Session {
@@ -384,6 +388,8 @@ impl Session {
             in_reactor: false,
             lisp_label: String::new(),
             binary_files: Default::default(),
+            clock: default_clock(),
+            audit_next_open: false,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -508,6 +514,9 @@ impl Session {
             }
         };
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
+        if spec.undoable && result.is_ok() {
+            cmd::fields::refresh(self);
+        }
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
         if spec.undoable
             && let Some((doc, sel, uid)) = before
@@ -749,6 +758,7 @@ impl Session {
         }
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
+        cmd::fields::refresh(self);
         if let Ok(st) = self.state_mut()
             && st.uid == run.doc_uid
             && !Arc::ptr_eq(&run.before, &st.doc)
@@ -1132,4 +1142,19 @@ mod tests;
 /// VNCCad: commands that save the drawing (for `:vlr-beginSave` / `:vlr-saveComplete`).
 fn is_save(id: &str) -> bool {
     matches!(id, "save" | "qsave" | "saveas")
+}
+
+/// VNCCad: the system clock (milliseconds since 1970, UTC) where there is one.
+fn default_clock() -> Option<fn() -> f64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        fn now() -> f64 {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
+        }
+        Some(now)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }

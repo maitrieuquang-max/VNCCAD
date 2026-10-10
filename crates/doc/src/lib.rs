@@ -76,6 +76,8 @@ pub struct Drawing {
     /// VNCCad: page setup of model space (paper, plot window, plot style table), saved in the
     /// "Model" LAYOUT object like AutoCAD does. `None`: defaults (fit extents on A4/Letter).
     pub model_page: Option<PageSetup>,
+    /// VNCCad: texts whose value is a field (FIELD): kept up to date after each command.
+    pub fields: Vec<FieldLink>,
 }
 
 impl Default for Drawing {
@@ -152,6 +154,7 @@ impl Drawing {
             parametric: Parametric::default(),
             handseed: 0x100,
             model_page: None,
+            fields: Vec::new(),
         }
     }
 

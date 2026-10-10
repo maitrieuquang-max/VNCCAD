@@ -265,6 +265,9 @@ pub struct Insert {
     pub col_spacing: f64,
     #[serde(default)]
     pub row_spacing: f64,
+    /// VNCCad: XCLIP boundary in block coordinates (only what lies inside is shown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<Vec<Vec2>>,
 }
 fn unit_scale() -> Vec3 {
     Vec3::new(1.0, 1.0, 1.0)
@@ -297,6 +300,9 @@ pub enum DimKind {
         x_type: bool,
     },
     ArcLength,
+    /// VNCCad: jogged radius (DIMJOGGED): `defpt` true centre, `p15` point on the arc,
+    /// `p13` centre location override, `p14` jog location.
+    Jogged,
 }
 /// A dimension. Definition points follow DXF: `defpt` (10: dimension line point),
 /// `p13`/`p14` (extension origins), `p15`/`p16` (arc/angle points), `text_mid` (11).

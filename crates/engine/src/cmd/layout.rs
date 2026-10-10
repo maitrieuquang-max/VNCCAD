@@ -64,6 +64,21 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["print"])
             .params("{path? (else returns base64 `data`), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?, lineweights?: bool}")
             .noundo(),
+        // VNCCad: print on a printer. The host sends the PDF (base64 `data`) to the system's
+        // printing (desktop) or the browser's print dialog (web).
+        CommandSpec::new("printer", "Print to Printer...", |s, p| {
+            let mut q = p.clone();
+            if let Some(o) = q.as_object_mut() {
+                o.remove("path");
+            }
+            let q = if q.is_null() { json!({}) } else { q };
+            run_plot(s, &q, "printer")
+        })
+        .menu(&["File", "Print to Printer..."])
+        .key("Cmd+Shift+P")
+        .alias(&["inmay", "printdirect"])
+        .params("{layout?, paper?, landscape?, fit?, scale?} → base64 `data` of the PDF the host prints")
+        .noundo(),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, p, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
             .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, lineweights?}")

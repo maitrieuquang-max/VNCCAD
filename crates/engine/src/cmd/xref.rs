@@ -258,6 +258,7 @@ fn run_xattach(s: &mut Session, p: &Value) -> Result<Value> {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     let h = d.add(&space, Common { layer, ..Common::default() }, EntityKind::Insert(ins)).map_err(|e| bad("xattach", e.to_string()))?;
     let msg = format!("Đã gắn tham chiếu {name} ({n} đối tượng).");

@@ -879,6 +879,26 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
     if ctx.depth >= cadcraft_doc::MAX_BLOCK_DEPTH {
         return;
     }
+    // VNCCad: XCLIP — draw, then keep only what lies inside the boundary.
+    let first_prim = b.list.prims.len();
+    let clip: Option<Vec<Vec2>> = ins.clip.as_ref().filter(|c| c.len() >= 2).and_then(|c| {
+        let base = ctx.d.block(&ins.block).map(|blk| blk.base.xy()).unwrap_or_default();
+        let m = ctx.xf.then_before(ins.transform(base));
+        let pts: Vec<Vec2> = if c.len() == 2 {
+            let (a, q) = (c.first().copied()?, c.get(1).copied()?);
+            vec![a, Vec2::new(q.x, a.y), q, Vec2::new(a.x, q.y)]
+        } else {
+            c.clone()
+        };
+        Some(pts.into_iter().map(|p| m.apply(p)).collect())
+    });
+    insert_body(b, ctx, e, ins, rgb);
+    if let Some(poly) = clip {
+        clip::clip_list_to_polygon(&mut b.list, first_prim, &poly);
+    }
+}
+
+fn insert_body(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Rgb) {
     if let Some(blk) = ctx.d.block(&ins.block) {
         let cols = ins.cols.clamp(1, 10_000);
         let rows = ins.rows.clamp(1, 10_000);

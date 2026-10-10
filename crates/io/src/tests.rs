@@ -132,6 +132,7 @@ fn sample() -> Drawing {
             rows: 1,
             col_spacing: 0.0,
             row_spacing: 0.0,
+            clip: None,
         }),
     )
     .unwrap();
@@ -1178,5 +1179,65 @@ fn dynamic_blocks_from_autocad_objects_survive_saving() {
         assert_eq!(back.block(&used).and_then(|b| b.dyn_ref.clone()), Some(r.clone()), "{name}");
         let hs: Vec<Handle> = back.block("COC").unwrap().entities.iter().map(|e| e.handle).collect();
         assert!(a.entities.iter().all(|h| hs.contains(h)), "{name}: entity handles kept");
+    }
+}
+
+/// VNCCad: an associative array keeps its parameters and source objects through DXF and DWG.
+#[test]
+fn associative_arrays_survive_saving() {
+    let mut d = Drawing::new_metric();
+    let mut b = cadcraft_doc::Block::new("*U3");
+    let src = cadcraft_doc::Entity {
+        handle: Handle(0x500),
+        common: Common::default(),
+        kind: EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(1.0, 0.0, 0.0) }),
+    };
+    let a = cadcraft_doc::ArrayDef {
+        kind: "rect".into(),
+        rows: 2,
+        cols: 2,
+        row_spacing: 3.0,
+        col_spacing: 4.0,
+        source: vec![src.clone()],
+        ..Default::default()
+    };
+    b.entities.push(cadcraft_doc::Entity { handle: Handle(0x501), ..src });
+    b.array = Some(a.clone());
+    d.blocks.insert("*U3".into(), std::sync::Arc::new(b));
+    let ins: cadcraft_doc::Insert = serde_json::from_value(serde_json::json!({ "block": "*U3", "insert": {"x":0.0,"y":0.0,"z":0.0} })).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+    for name in ["a.dxf", "a.dwg"] {
+        let back = read(&write(&d, name).unwrap(), name).unwrap();
+        let used = first(&back, |k| if let EntityKind::Insert(i) = k { Some(i.block.clone()) } else { None });
+        assert_eq!(back.block(&used).and_then(|b| b.array.clone()), Some(a.clone()), "{name}");
+    }
+}
+
+/// VNCCad: XCLIP boundaries are written as AutoCAD's SPATIAL_FILTER and read back (DXF, DWG).
+#[test]
+fn xclip_boundaries_survive_saving() {
+    let mut d = Drawing::new_metric();
+    let mut b = cadcraft_doc::Block::new("K");
+    b.base = Vec3::new(1.0, 1.0, 0.0);
+    b.entities.push(cadcraft_doc::Entity {
+        handle: Handle(0x900),
+        common: Common::default(),
+        kind: EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(9.0, 0.0, 0.0) }),
+    });
+    d.blocks.insert("K".into(), std::sync::Arc::new(b));
+    let clip = vec![cadcraft_geom::Vec2::new(0.0, -1.0), cadcraft_geom::Vec2::new(5.0, -1.0), cadcraft_geom::Vec2::new(3.0, 4.0)];
+    let ins: cadcraft_doc::Insert = serde_json::from_value(
+        serde_json::json!({ "block": "K", "insert": {"x":50.0,"y":20.0,"z":0.0}, "scale": {"x":2.0,"y":2.0,"z":1.0}, "rotation": 0.5 }),
+    )
+    .unwrap();
+    let ins = cadcraft_doc::Insert { clip: Some(clip.clone()), ..ins };
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+    for name in ["c.dxf", "c.dwg"] {
+        let back = read(&write(&d, name).unwrap(), name).unwrap();
+        let got = first(&back, |k| if let EntityKind::Insert(i) = k { i.clip.clone() } else { None });
+        assert_eq!(got.len(), 3, "{name}");
+        for (a, b) in got.iter().zip(&clip) {
+            assert!(a.near(*b, 1e-6), "{name}: {got:?}");
+        }
     }
 }

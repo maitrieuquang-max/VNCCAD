@@ -122,6 +122,8 @@ struct Ctx {
     pdf_defs: Vec<(String, String, usize)>,
     /// ACAD_PDFDEFINITIONS dictionary handle (when there are PDF underlays).
     pdf_dict: Option<String>,
+    /// VNCCad: XCLIPped INSERT → (extension dictionary, ACAD_FILTER dictionary, SPATIAL_FILTER).
+    clips: HashMap<Handle, (String, String, String)>,
 }
 
 #[derive(Default)]
@@ -188,9 +190,26 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
         w.xdata(ov.t);
         w.s(1002, "}");
     }
-    if !dm.assoc.is_empty() {
+    let jog = matches!(dm.kind, DimKind::Jogged);
+    if !dm.assoc.is_empty() || jog {
         w.s(1001, dxf_ext::APP);
-        w.xdata(dxf_ext::assoc_xdata(&dm.assoc));
+        if !dm.assoc.is_empty() {
+            w.xdata(dxf_ext::assoc_xdata(&dm.assoc));
+        }
+        if jog {
+            // VNCCad: jogged radius (written as a radial dimension with its drawn block).
+            w.xdata(vec![
+                Tag::s(1000, "JOG"),
+                Tag::s(1002, "{"),
+                Tag::f(1010, dm.p13.x),
+                Tag::f(1020, dm.p13.y),
+                Tag::f(1030, dm.p13.z),
+                Tag::f(1011, dm.p14.x),
+                Tag::f(1021, dm.p14.y),
+                Tag::f(1031, dm.p14.z),
+                Tag::s(1002, "}"),
+            ]);
+        }
     }
 }
 
@@ -275,15 +294,17 @@ fn header_vars(w: &mut W, d: &Drawing) {
 }
 
 fn common(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str) {
-    common_x(w, e, owner, paper, subclass, None);
+    common_x(w, e, owner, paper, subclass, None, None);
 }
 
 /// Common entity groups; `assoc` adds the reactor and extension dictionary of a DIMASSOC.
-fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, assoc: Option<&AssocObj>) {
+fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, assoc: Option<&AssocObj>, xdict: Option<&str>) {
     w.s(5, e.handle.hex());
     if let Some(a) = assoc {
         w.group("ACAD_REACTORS", 330, &[&a.handle]);
         w.group("ACAD_XDICTIONARY", 360, &[&a.xdict]);
+    } else if let Some(x) = xdict {
+        w.group("ACAD_XDICTIONARY", 360, &[x]);
     }
     w.s(330, owner);
     w.s(100, "AcDbEntity");
@@ -517,7 +538,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
-            common(w, e, owner, paper, "AcDbBlockReference");
+            common_x(w, e, owner, paper, "AcDbBlockReference", None, cx.clips.get(&e.handle).map(|c| c.0.as_str()));
             if !i.attribs.is_empty() {
                 w.i(66, 1);
             }
@@ -554,7 +575,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         EntityKind::Dimension(dm) => {
             w.s(0, "DIMENSION");
-            common_x(w, e, owner, paper, "AcDbDimension", cx.assoc.get(&e.handle));
+            common_x(w, e, owner, paper, "AcDbDimension", cx.assoc.get(&e.handle), None);
             let bname = cx.dim_blocks.get(&e.handle).cloned().or_else(|| dm.block.clone()).unwrap_or_default();
             w.s(2, bname);
             w.p(10, dm.defpt);
@@ -566,7 +587,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 DimKind::Aligned => 1,
                 DimKind::Angular => 2,
                 DimKind::Diameter => 3,
-                DimKind::Radius => 4,
+                DimKind::Radius | DimKind::Jogged => 4,
                 DimKind::Angular3P => 5,
                 DimKind::Ordinate { x_type } => 6 | if x_type { 64 } else { 0 },
                 DimKind::ArcLength => 1,
@@ -589,7 +610,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.p(13, dm.p13);
                     w.p(14, dm.p14);
                 }
-                DimKind::Radius => {
+                DimKind::Radius | DimKind::Jogged => {
                     w.s(100, "AcDbRadialDimension");
                     w.p(15, dm.p15);
                     w.f(40, 0.0);
@@ -1178,6 +1199,14 @@ pub fn write(d: &Drawing) -> String {
     if !cx.image_defs.is_empty() {
         cx.image_dict = Some((w.h(), w.h()));
     }
+    // VNCCad: XCLIP boundaries.
+    for e in &every {
+        if let EntityKind::Insert(i) = &e.kind
+            && i.clip.as_ref().is_some_and(|c| c.len() >= 2)
+        {
+            cx.clips.insert(e.handle, (w.h(), w.h(), w.h()));
+        }
+    }
     if !cx.pdf_defs.is_empty() {
         cx.pdf_dict = Some(w.h());
     }
@@ -1637,6 +1666,57 @@ pub fn write(d: &Drawing) -> String {
         w.i(280, 1);
         for l in &settings {
             w.s(1, l.clone());
+        }
+    }
+    // VNCCad: XCLIP: INSERT extension dictionary → ACAD_FILTER → SPATIAL (SPATIAL_FILTER).
+    for e in &every {
+        let (EntityKind::Insert(i), Some((xd, fd, sf))) = (&e.kind, cx.clips.get(&e.handle)) else { continue };
+        let Some(clip) = &i.clip else { continue };
+        let base = d.block(&i.block).map(|b| b.base.xy()).unwrap_or_default();
+        let m = i.transform(base);
+        let Some(inv) = m.inverse() else { continue };
+        w.s(0, "DICTIONARY");
+        w.s(5, xd.clone());
+        w.s(330, e.handle.hex());
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, "ACAD_FILTER");
+        w.s(360, fd.clone());
+        w.s(0, "DICTIONARY");
+        w.s(5, fd.clone());
+        w.s(330, xd.clone());
+        w.s(100, "AcDbDictionary");
+        w.i(280, 1);
+        w.i(281, 1);
+        w.s(3, "SPATIAL");
+        w.s(360, sf.clone());
+        w.s(0, "SPATIAL_FILTER");
+        w.s(5, sf.clone());
+        w.s(330, fd.clone());
+        w.s(100, "AcDbFilter");
+        w.s(100, "AcDbSpatialFilter");
+        w.i(70, clip.len() as i64);
+        for p in clip {
+            // Drawing coordinates now; the inverse insert matrix maps them back to the block.
+            let q = m.apply(*p);
+            w.f(10, q.x);
+            w.f(20, q.y);
+        }
+        w.f(210, 0.0);
+        w.f(220, 0.0);
+        w.f(230, 1.0);
+        w.f(11, 0.0);
+        w.f(21, 0.0);
+        w.f(31, 0.0);
+        w.i(71, 1);
+        w.i(72, 0);
+        w.i(73, 0);
+        for v in [inv.a, inv.b, 0.0, inv.c, inv.d, 0.0, 0.0, 0.0, 1.0, inv.e, inv.f, 0.0] {
+            w.f(40, v);
+        }
+        for v in [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] {
+            w.f(40, v);
         }
     }
     // PDF underlays: ACAD_PDFDEFINITIONS and one PDFDEFINITION per file and page.

@@ -189,6 +189,31 @@ impl EntityStore {
             None => false,
         }
     }
+    /// VNCCad: move `h` just above (drawn after) or under (drawn before) `reference`.
+    pub fn move_relative(&mut self, h: Handle, reference: Handle, above: bool) -> bool {
+        if h == reference || !self.contains(reference) {
+            return false;
+        }
+        let Some(e) = self.remove(h) else { return false };
+        let Some(id) = self.chunk_id(reference) else {
+            self.push(Arc::unwrap_or_clone(e));
+            return false;
+        };
+        let Some(pos) = self.chunk_pos(id) else { return false };
+        let Some(c) = self.chunks.get_mut(pos) else { return false };
+        let chunk = Arc::make_mut(c);
+        let Some(i) = chunk.items.iter().position(|x| x.handle == reference) else { return false };
+        chunk.items.insert(if above { i + 1 } else { i }, e);
+        let cid = chunk.id;
+        self.set_index(h, Some(cid));
+        self.len += 1;
+        true
+    }
+    /// VNCCad: draw-order position of each handle (0 = drawn first).
+    pub fn order_of(&self, hs: &[Handle]) -> Vec<(Handle, usize)> {
+        let set: std::collections::HashSet<Handle> = hs.iter().copied().collect();
+        self.iter().enumerate().filter(|(_, e)| set.contains(&e.handle)).map(|(i, e)| (e.handle, i)).collect()
+    }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
     pub fn same_as(&self, other: &EntityStore) -> bool {

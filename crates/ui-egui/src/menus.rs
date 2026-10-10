@@ -80,6 +80,18 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     };
     let no_path = params.is_null() || (params.get("path").is_none() && params.get("data").is_none());
     let r = match id {
+        "recover" if no_path => {
+            app.session.audit_next_open = true;
+            if let Some(req) = app.services.request_open.as_ref() {
+                req();
+                return Some(Ok(Value::Null));
+            }
+            match app.services.pick_open.as_ref().and_then(|f| f()) {
+                Some(p) => app.open_path(&p),
+                None => app.session.audit_next_open = false,
+            }
+            Ok(Value::Null)
+        }
         "ui.open" | "open" if no_path => {
             if let Some(req) = app.services.request_open.as_ref() {
                 req();
@@ -175,6 +187,26 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
         }
         // Only interactive invocations (menu, toolbar, command line) pick a file; JSON calls with
         // parameters keep returning base64 `data` and never open a dialog.
+        "printer" => {
+            let stem = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing".into());
+            let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(a, _)| a).to_string();
+            let name = format!("{stem}.pdf");
+            let opts = if params.is_null() { json!({}) } else { params.clone() };
+            let r = app.session.execute("printer", &opts).map_err(|e| e.to_string()).and_then(|v| {
+                let data = v.get("data").and_then(Value::as_str).ok_or_else(|| "no PDF data".to_string())?;
+                cadcraft_engine::cmd::file::base64_decode(data).ok_or_else(|| "invalid PDF data".to_string())
+            });
+            let r = match (r, app.services.print_pdf.as_ref()) {
+                (Ok(bytes), Some(print)) => print(&name, &bytes),
+                (Ok(_), None) => Err("Bản này chưa in thẳng ra máy in được: dùng PLOT để lưu PDF rồi in.".into()),
+                (Err(e), _) => Err(e),
+            };
+            match r {
+                Ok(m) => app.session.echo(m),
+                Err(e) => app.session.echo(format!("Không in được: {e}")),
+            }
+            Ok(Value::Null)
+        }
         "plot" | "exportpdf" | "publish" if params.is_null() => {
             let stem = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing".into());
             let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(a, _)| a).to_string();

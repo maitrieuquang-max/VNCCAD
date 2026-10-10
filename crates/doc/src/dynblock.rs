@@ -118,3 +118,43 @@ pub struct DynRef {
     /// (parameter id, value).
     pub values: Vec<(i64, DynValue)>,
 }
+
+/// VNCCad: an associative array (ARRAYRECT / ARRAYPOLAR with Associative = Yes): its source
+/// objects and parameters. The array is an INSERT of an anonymous block holding the items;
+/// ARRAYEDIT changes the parameters and rebuilds the block.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ArrayDef {
+    /// "rect" or "polar".
+    pub kind: String,
+    pub rows: u32,
+    pub cols: u32,
+    pub row_spacing: f64,
+    pub col_spacing: f64,
+    pub count: u32,
+    /// Polar: angle to fill (degrees), centre, whether items rotate.
+    pub angle: f64,
+    pub center: Vec2,
+    pub rotate: bool,
+    /// The source objects (drawing coordinates).
+    pub source: Vec<crate::Entity>,
+}
+
+/// VNCCad: a text (TEXT or MTEXT) whose value is computed (FIELD / UPDATEFIELD).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FieldLink {
+    /// The text showing the value.
+    pub text: Handle,
+    /// "area", "perimeter", "length", "radius", "date", "filename", "sheet", "count".
+    pub kind: String,
+    /// The object measured (object fields).
+    pub object: Option<Handle>,
+    /// Value × factor (unit conversion, e.g. 1e-6 for mm² → m²), decimals, prefix, suffix.
+    pub factor: f64,
+    pub decimals: u32,
+    pub prefix: String,
+    pub suffix: String,
+    /// Date format (`%d/%m/%Y`…).
+    pub format: String,
+}

@@ -470,6 +470,9 @@ pub struct Block {
     /// VNCCad: an anonymous block made from a dynamic block, with its property values.
     #[serde(default)]
     pub dyn_ref: Option<crate::DynRef>,
+    /// VNCCad: an associative array's parameters and source objects.
+    #[serde(default)]
+    pub array: Option<crate::ArrayDef>,
 }
 
 impl Block {
@@ -485,6 +488,7 @@ impl Block {
             units: 0,
             dyn_def: None,
             dyn_ref: None,
+            array: None,
         }
     }
 }

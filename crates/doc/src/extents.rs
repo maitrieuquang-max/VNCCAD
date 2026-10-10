@@ -74,6 +74,7 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
                 crate::DimKind::Angular3P => vec![dm.defpt.xy(), dm.p13.xy(), dm.p14.xy(), dm.p15.xy()],
                 crate::DimKind::Angular => vec![dm.defpt.xy(), dm.p13.xy(), dm.p14.xy(), dm.p15.xy(), dm.p16.xy()],
                 crate::DimKind::Ordinate { .. } => vec![dm.p13.xy(), dm.p14.xy()],
+                crate::DimKind::Jogged => vec![dm.p13.xy(), dm.p14.xy(), dm.p15.xy()],
             };
             let mut b = Bounds2::from_points(pts);
             if dm.user_text_pos {

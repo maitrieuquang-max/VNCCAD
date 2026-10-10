@@ -88,6 +88,7 @@ fn services() -> Services {
         download: None,
         autosave: autosave_store::store(),
         local_fonts: None,
+        print_pdf: Some(Box::new(print_pdf)),
     }
 }
 
@@ -164,4 +165,46 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+/// VNCCad: print a PDF on the default printer. Windows: the PDF viewer's "Print" verb (Acrobat,
+/// Foxit, SumatraPDF…); macOS/Linux: `lp` (CUPS). When that is not possible the PDF is opened
+/// so it can be printed from the viewer.
+fn print_pdf(name: &str, bytes: &[u8]) -> Result<String, String> {
+    use std::process::Command;
+    let dir = std::env::temp_dir().join("vnccad-print");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    let path = dir.join(if safe.is_empty() { "VNCCad.pdf".to_string() } else { safe });
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    let p = path.to_string_lossy().to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const NO_WINDOW: u32 = 0x0800_0000;
+        let script = format!("Start-Process -FilePath '{}' -Verb Print", p.replace('\'', "''"));
+        let ok = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(NO_WINDOW)
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            return Ok(format!("Đã gửi {name} tới máy in mặc định."));
+        }
+        let opened = Command::new("cmd").args(["/C", "start", "", &p]).creation_flags(NO_WINDOW).status().is_ok_and(|s| s.success());
+        if opened {
+            return Ok(format!("Máy chưa có chương trình in PDF trực tiếp: đã mở {name}, hãy chọn In (Ctrl+P) trong trình xem."));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if Command::new("lp").arg(&p).status().is_ok_and(|s| s.success()) {
+            return Ok(format!("Đã gửi {name} tới máy in mặc định (lp)."));
+        }
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        if Command::new(opener).arg(&p).status().is_ok_and(|s| s.success()) {
+            return Ok(format!("Không gửi thẳng được tới máy in: đã mở {name}, hãy chọn In trong trình xem."));
+        }
+    }
+    Err(format!("không tìm thấy máy in hay trình xem PDF; file PDF ở {p}"))
 }

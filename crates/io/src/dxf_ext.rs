@@ -408,6 +408,12 @@ struct DynPayload {
     /// Block name → (definition, reference values, the INSERTs using it: anonymous blocks may
     /// be renamed by other programs, the INSERT handles stay).
     blocks: Vec<(String, Option<cadcraft_doc::DynDef>, Option<cadcraft_doc::DynRef>, Vec<Handle>)>,
+    /// Associative arrays: block name → (parameters, the INSERTs using it).
+    #[serde(default)]
+    arrays: Vec<(String, cadcraft_doc::ArrayDef, Vec<Handle>)>,
+    /// Fields (texts whose value is computed).
+    #[serde(default)]
+    fields: Vec<cadcraft_doc::FieldLink>,
 }
 
 /// INSERT handles (model and paper space) by the block they insert.
@@ -425,7 +431,7 @@ fn inserts_by_block(d: &Drawing) -> HashMap<String, Vec<Handle>> {
 
 /// The dynamic-block XRECORD text, when some block is dynamic.
 pub(crate) fn dyn_chunks(d: &Drawing) -> Option<Vec<String>> {
-    if !d.blocks.values().any(|b| b.dyn_def.is_some() || b.dyn_ref.is_some()) {
+    if !d.blocks.values().any(|b| b.dyn_def.is_some() || b.dyn_ref.is_some() || b.array.is_some()) && d.fields.is_empty() {
         return None;
     }
     let ins = inserts_by_block(d);
@@ -438,11 +444,19 @@ pub(crate) fn dyn_chunks(d: &Drawing) -> Option<Vec<String>> {
             (n.clone(), b.dyn_def.clone(), b.dyn_ref.clone(), hs)
         })
         .collect();
-    if blocks.is_empty() {
+    blocks.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut arrays: Vec<(String, cadcraft_doc::ArrayDef, Vec<Handle>)> = d
+        .blocks
+        .iter()
+        .filter_map(|(n, b)| {
+            b.array.as_ref().map(|a| (n.clone(), a.clone(), ins.get(n).map(|v| v.iter().take(8).copied().collect()).unwrap_or_default()))
+        })
+        .collect();
+    arrays.sort_by(|a, b| a.0.cmp(&b.0));
+    if blocks.is_empty() && arrays.is_empty() && d.fields.is_empty() {
         return None;
     }
-    blocks.sort_by(|a, b| a.0.cmp(&b.0));
-    let json = serde_json::to_string(&DynPayload { version: 1, blocks }).ok()?;
+    let json = serde_json::to_string(&DynPayload { version: 1, blocks, arrays, fields: d.fields.clone() }).ok()?;
     Some(json_chunks(&json))
 }
 
@@ -468,6 +482,13 @@ pub(crate) fn apply_dyn(d: &mut Drawing, text: &str) {
             if r.is_some() {
                 b.dyn_ref = r;
             }
+        }
+    }
+    d.fields = p.fields.into_iter().filter(|f| d.entity(f.text).is_some()).collect();
+    for (name, a, hs) in p.arrays {
+        let name = hs.iter().find_map(|h| by_handle.get(h).cloned()).unwrap_or(name);
+        if let Some(b) = d.blocks.get_mut(&name) {
+            std::sync::Arc::make_mut(b).array = Some(a);
         }
     }
 }

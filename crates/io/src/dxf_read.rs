@@ -235,6 +235,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             rows: t.i(71).unwrap_or(1).clamp(1, 10_000) as u32,
             col_spacing: t.fd(44, 0.0),
             row_spacing: t.fd(45, 0.0),
+            clip: None,
         }),
         "DIMENSION" => {
             let ty = t.i(70).unwrap_or(0) & 0x0f;
@@ -549,7 +550,7 @@ struct Rx {
     /// VNCCad: BLOCK_RECORD extension dictionary handle → block name (dynamic blocks).
     br_xdict: HashMap<String, String>,
     /// VNCCad: INSERT extension dictionary handle and the block it inserts.
-    insert_xdict: Vec<(String, String)>,
+    insert_xdict: Vec<(String, String, Handle)>,
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -559,6 +560,14 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs);
             dm.assoc = crate::dxf_ext::read_assoc(tags);
+            // VNCCad: jogged radius.
+            let jog = crate::dxf_ext::xdata_list(crate::dxf_ext::xdata(tags, crate::dxf_ext::APP), "JOG");
+            if matches!(dm.kind, DimKind::Radius) && !jog.is_empty() {
+                let f = |c: i32| jog.iter().find(|t| t.code == c).map(Tag::f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+                dm.kind = DimKind::Jogged;
+                dm.p13 = Vec3::new(f(1010), f(1020), f(1030));
+                dm.p14 = Vec3::new(f(1011), f(1021), f(1031));
+            }
         }
         ("ACAD_TABLE", EntityKind::Table(_)) => {
             let t = T(tags);
@@ -624,7 +633,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                 if let (Some(x), Some(b)) = (crate::dxf_dyn::xdict(tags), t.s(2))
                     && rx.insert_xdict.len() < 1_000_000
                 {
-                    rx.insert_xdict.push((x, b));
+                    rx.insert_xdict.push((x, b, handle.unwrap_or(Handle(0))));
                 }
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
@@ -1170,6 +1179,7 @@ impl Objects {
         }
         // VNCCad: dynamic blocks (AutoCAD's objects; VNCCad's own record, read after, wins).
         crate::dxf_dyn::apply(d, &self.dynamic, &self.xrecords, &rx.br_xdict, &rx.brs, &rx.insert_xdict);
+        crate::dxf_dyn::apply_clips(d, &self.dynamic, &rx.insert_xdict);
         let key = self.names.iter().find(|(_, n)| n.as_str() == crate::dxf_ext::DYN_KEY).map(|(h, _)| h.clone());
         if let Some(tags) = key.and_then(|k| self.xrecords.get(&k)) {
             let mut text = String::new();

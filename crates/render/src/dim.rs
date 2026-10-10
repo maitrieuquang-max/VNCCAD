@@ -570,6 +570,46 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 }
             }
         }
+        DimKind::Jogged => {
+            // VNCCad: jogged radius. The dimension line runs from the arc back towards the
+            // centre, jogs at `p14` and ends at the centre override `p13`.
+            let center = d.defpt.xy();
+            let tip = d.p15.xy();
+            let over = d.p13.xy();
+            let jog = d.p14.xy();
+            let r = center.dist(tip);
+            g.mtext = linear_text(r, d, st, "R");
+            let (tw, _) = measure(&g.mtext);
+            let u = (tip - center).normalized();
+            let u = if u == Vec2::ZERO || !u.is_finite() { Vec2::X } else { u };
+            // A on the line through the tip, B on the parallel line through the override.
+            let a = tip + u * (jog - tip).dot(u);
+            let b = over + u * (jog - over).dot(u);
+            let h = asz.max(1e-9);
+            // The jog: a short zig between the two parallel lines (45° like DIMJOGANG).
+            let side = (b - a).normalized();
+            let side = if side.is_finite() && side != Vec2::ZERO { side } else { u.perp() };
+            let mid = a.mid(b);
+            let _ = side;
+            let j1 = mid - u * (h * 0.5);
+            let j2 = mid + u * (h * 0.5);
+            g.dim(vec![tip, a, j1, j2, b, over]);
+            end(&mut g, blk2, tip, u);
+            let tpos = if d.user_text_pos { text_mid } else { tip + u * (asz.max(tsz) * 3.0) };
+            g.dim(vec![tip, tpos]);
+            if st.text_outside_horizontal {
+                text_angle = 0.0;
+                let sx = if u.x >= 0.0 { 1.0 } else { -1.0 };
+                if !d.user_text_pos {
+                    text_mid = tpos + Vec2::new(tw / 2.0 + gap, 0.0) * sx;
+                }
+            } else {
+                text_angle = readable(u.angle());
+                if !d.user_text_pos {
+                    text_mid = tpos + u * (tw / 2.0 + gap);
+                }
+            }
+        }
         DimKind::Angular | DimKind::Angular3P => {
             // Angular3P: p15 vertex, p13/p14 on the legs, defpt on the arc.
             // Angular (2 lines): lines p13-p14 and defpt-p15; p16 on the arc.

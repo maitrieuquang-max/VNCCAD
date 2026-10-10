@@ -1015,6 +1015,19 @@ fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
     let cols = p.get("cols").and_then(Value::as_u64).unwrap_or(4).clamp(1, 1000);
     let rs = f64_or(p, "rowSpacing", 1.0);
     let cs = f64_or(p, "colSpacing", 1.0);
+    // VNCCad: associative (one object, ARRAYEDIT changes it).
+    if bool_or(p, "associative", false) {
+        let def = cadcraft_doc::ArrayDef {
+            kind: "rect".into(),
+            rows: rows as u32,
+            cols: cols as u32,
+            row_spacing: rs,
+            col_spacing: cs,
+            ..Default::default()
+        };
+        let h = super::assocarray::make(s, &hs, def)?;
+        return Ok(json!({ "array": h.hex(), "created": rows * cols - 1 }));
+    }
     let mut out = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -1033,6 +1046,12 @@ fn run_arraypolar(s: &mut Session, p: &Value) -> Result<Value> {
     let n = p.get("count").and_then(Value::as_u64).unwrap_or(6).clamp(1, 10_000);
     let total = f64_or(p, "angle", 360.0).to_radians();
     let rotate = bool_or(p, "rotate", true);
+    if bool_or(p, "associative", false) {
+        let def =
+            cadcraft_doc::ArrayDef { kind: "polar".into(), count: n as u32, angle: total.to_degrees(), center: c, rotate, ..Default::default() };
+        let h = super::assocarray::make(s, &hs, def)?;
+        return Ok(json!({ "array": h.hex(), "created": n - 1 }));
+    }
     let step = if (total - TAU).abs() < 1e-9 { total / n as f64 } else { total / (n.saturating_sub(1).max(1)) as f64 };
     let mut out = Vec::new();
     for k in 1..n {
@@ -1347,9 +1366,9 @@ impl SelectThen {
                 let rs = b.height() * 1.5 + 1e-9;
                 run_arrayrect(
                     s,
-                    &json!({ "handles": objs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "rows": 3, "cols": 4, "rowSpacing": rs, "colSpacing": cs }),
+                    &json!({ "handles": objs.iter().map(|h| h.hex()).collect::<Vec<_>>(), "rows": 3, "cols": 4, "rowSpacing": rs, "colSpacing": cs, "associative": true }),
                 )?;
-                s.echo("Type = Rectangular  Associative = No (3 rows × 4 columns)");
+                s.echo("Type = Rectangular  Associative = Yes (3 rows × 4 columns) — ARRAYEDIT để đổi số hàng, cột, khoảng cách");
                 Ok(Step::Done)
             }
             _ => Ok(Step::Continue),
@@ -1550,7 +1569,7 @@ impl Interactive for SelectThen {
                     _ => return Ok(Step::Continue),
                 };
                 let objs: Vec<String> = self.objs.iter().map(|h| h.hex()).collect();
-                run_arraypolar(s, &json!({ "handles": objs, "center": [self.pts[0].x, self.pts[0].y], "count": n }))?;
+                run_arraypolar(s, &json!({ "handles": objs, "center": [self.pts[0].x, self.pts[0].y], "count": n, "associative": true }))?;
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }

@@ -106,6 +106,8 @@ pub struct Services {
     /// VNCCad web: ask the browser for a CJK font installed on this computer (Local Font
     /// Access); the font arrives later through [`CadApp::open_bytes`].
     pub local_fonts: Option<Box<dyn Fn()>>,
+    /// VNCCad: print a PDF (name, bytes) on a printer; returns a message for the command line.
+    pub print_pdf: Option<Box<dyn Fn(&str, &[u8]) -> Result<String, String>>>,
 }
 
 pub struct CadApp {

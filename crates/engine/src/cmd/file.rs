@@ -206,6 +206,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
                 cadcraft_io::raster::add_dir(dir);
             }
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
+            recover_if_asked(s, path);
             return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
         }
         #[cfg(target_arch = "wasm32")]
@@ -215,7 +216,22 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = base64_decode(data).ok_or_else(|| bad("open", "invalid base64"))?;
     let name = str_param(p, "name").unwrap_or("Drawing.dxf");
     let i = open_bytes(s, &bytes, name, None)?;
+    recover_if_asked(s, name);
     Ok(json!({ "index": i }))
+}
+
+/// VNCCad: RECOVER started from the UI: audit and fix the drawing just opened.
+fn recover_if_asked(s: &mut Session, name: &str) {
+    let l = name.to_ascii_lowercase();
+    if !s.audit_next_open || !(l.ends_with(".dxf") || l.ends_with(".dwg")) {
+        return;
+    }
+    s.audit_next_open = false;
+    if let Ok(r) = s.execute("audit", &json!({ "fix": true }))
+        && let Some(m) = r.get("message").and_then(Value::as_str)
+    {
+        s.echo(format!("RECOVER — {m}"));
+    }
 }
 
 fn run_close(s: &mut Session, p: &Value) -> Result<Value> {

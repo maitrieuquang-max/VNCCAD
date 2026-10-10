@@ -64,6 +64,7 @@ fn insert_bounds_with_cyclic_block_terminate() {
             rows: 1,
             col_spacing: 0.0,
             row_spacing: 0.0,
+            clip: None,
         }),
     ));
     b.entities.push(Entity::new(Handle(2), line((0.0, 0.0), (1.0, 1.0))));
@@ -82,6 +83,7 @@ fn insert_bounds_with_cyclic_block_terminate() {
                 rows: 1,
                 col_spacing: 0.0,
                 row_spacing: 0.0,
+                clip: None,
             }),
         )
         .unwrap();

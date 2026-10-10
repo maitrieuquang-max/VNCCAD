@@ -237,6 +237,33 @@ mod web {
         }
     }
 
+    /// VNCCad: print a PDF through the browser's print dialog (the PDF in a hidden frame; a new
+    /// tab when the browser does not allow printing frames).
+    fn print_pdf(name: &str, bytes: &[u8]) -> Result<String, String> {
+        use wasm_bindgen::JsValue;
+        const BODY: &str = "const blob = new Blob([bytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            const f = document.createElement('iframe');
+            f.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0';
+            f.src = url;
+            f.onload = () => setTimeout(() => {
+                try { f.contentWindow.focus(); f.contentWindow.print(); }
+                catch (e) { window.open(url, '_blank'); }
+            }, 400);
+            document.body.appendChild(f);
+            setTimeout(() => { f.remove(); URL.revokeObjectURL(url); }, 600000);
+            return true;";
+        let f = js_sys::Function::new_with_args("bytes", BODY);
+        f.call1(&JsValue::NULL, &js_sys::Uint8Array::from(bytes)).map_err(|e| format!("{e:?}"))?;
+        Ok(format!("Đã mở hộp thoại in của trình duyệt cho {name}: chọn máy in rồi bấm In."))
+    }
+
+    /// VNCCad: the browser's clock in local time (date fields).
+    fn local_now() -> f64 {
+        let d = js_sys::Date::new_0();
+        d.get_time() - d.get_timezone_offset() * 60_000.0
+    }
+
     /// VNCCad: show the browser's file picker; the chosen drawing lands in `inbox`.
     fn request_open(inbox: &Inbox, ctx: &egui::Context) {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
@@ -410,9 +437,12 @@ mod web {
                             download: Some(Box::new(download)),
                             autosave: autosave_store(),
                             local_fonts: Some(Box::new(move || local_cjk_font(&ib2, &ctx2))),
+                            print_pdf: Some(Box::new(print_pdf)),
                             ..Services::default()
                         };
-                        let mut app = CadApp::new(Session::new(), services);
+                        let mut session = Session::new();
+                        session.clock = Some(local_now);
+                        let mut app = CadApp::new(session, services);
                         if let Some(rs) = &cc.wgpu_render_state {
                             app.set_wgpu(rs);
                         }

@@ -92,6 +92,7 @@ pub(crate) fn insert(s: &mut Session, name: &str, at: Vec2, scale: f64, rotation
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
+        clip: None,
     };
     let m = ins.transform(blk.base.xy());
     for e in blk.entities.iter() {
@@ -493,6 +494,7 @@ impl Interactive for InsertM {
             rows: 1,
             col_spacing: 0.0,
             row_spacing: 0.0,
+            clip: None,
         })]
     }
 }

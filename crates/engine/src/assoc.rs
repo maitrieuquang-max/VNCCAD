@@ -141,7 +141,7 @@ fn circle_at(d: &Drawing, space: &Space, c: Vec2, r: Option<f64>) -> Option<Hand
 pub fn reassociate(d: &Drawing, space: &Space, dm: &Dimension) -> Vec<DimAssoc> {
     match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => auto_assoc(d, space, &[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]),
-        DimKind::Radius => {
+        DimKind::Radius | DimKind::Jogged => {
             let (c, p) = (dm.defpt.xy(), dm.p15.xy());
             match circle_at(d, space, c, Some(c.dist(p))) {
                 Some(h) => vec![
