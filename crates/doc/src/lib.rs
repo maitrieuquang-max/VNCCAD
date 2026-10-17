@@ -133,6 +133,8 @@ impl Drawing {
         d.header = Header::metric();
         d.dim_styles.push(DimStyle::iso25());
         d.header.set_str("DIMSTYLE", "ISO-25");
+        // VNCCad: metric multileaders (acadiso: text 4, arrow 4, landing gap 2, dogleg 8).
+        d.mleader_styles = vec![MLeaderStyle { arrow_size: 4.0, text_height: 4.0, landing_gap: 2.0, dogleg: 8.0, ..MLeaderStyle::default() }];
         d
     }
     fn bare() -> Self {

@@ -507,7 +507,14 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
             }
             Atom::Word(segs) => {
                 let ww: f64 = segs.iter().map(|(sg, f)| seg_width(sg, fmt(*f))).sum();
-                let sw = pending_space.map(|f| text_width(&fmt(f).font, " ", fmt(f).height, fmt(f).wf)).unwrap_or(0.0);
+                // VNCCad: a space's advance (word widths leave out the trailing letter gap, so measure
+                // the space after a letter rather than alone: it used to be half as wide).
+                let sw = pending_space
+                    .map(|f| {
+                        let fm = fmt(f);
+                        text_width(&fm.font, "x ", fm.height, fm.wf) - text_width(&fm.font, "x", fm.height, fm.wf)
+                    })
+                    .unwrap_or(0.0);
                 if width > 0.0 && !line.items.is_empty() && line.width + sw + ww > width + 1e-9 {
                     finish(&mut lines, &mut line, fmt(last_fmt));
                 } else if !line.items.is_empty() || pending_space.is_some() {

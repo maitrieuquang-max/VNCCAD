@@ -6,6 +6,8 @@ name: VNCCad build
 on:
   push:
     branches: [vnccad, main]
+    # VNCCad: a tag v* also publishes a GitHub Release with the packages and the test kit.
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -158,3 +160,54 @@ jobs:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+
+  release:
+    name: Phát hành (Release) cho kỹ sư test
+    needs: [web, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Test kit documents
+        run: |
+          pip install --quiet openpyxl
+          mkdir -p kit
+          python3 packaging/testkit/make_testkit.py "${GITHUB_REF_NAME#v}" kit
+          cp -r packaging/testkit/mau kit/mau
+      - name: Packages
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          # Windows: the app folder with the test kit inside.
+          mkdir -p pkg/win && cp -r art/vnccad-windows-x64 pkg/win/VNCCad && cp -r kit/* pkg/win/VNCCad/
+          (cd pkg/win && zip -qr "../../dist/VNCCad-$V-windows-x64.zip" VNCCad)
+          # Linux: keep the executable bits (artifacts drop them).
+          mkdir -p pkg/linux && cp -r art/vnccad-linux-x86_64 pkg/linux/VNCCad && cp -r kit/* pkg/linux/VNCCad/
+          chmod +x pkg/linux/VNCCad/vnccad pkg/linux/VNCCad/vnccad-cli
+          tar -C pkg/linux -czf "dist/VNCCad-$V-linux-x86_64.tar.gz" VNCCad
+          # Web: the static site, for an internal server.
+          (cd art/vnccad-web && zip -qr "../../dist/VNCCad-$V-web.zip" .)
+          # The test kit alone.
+          (cd kit && zip -qr "../dist/VNCCad-$V-bo-test.zip" .)
+          cp kit/HUONG_DAN_TEST.html kit/PHIEU_TEST.xlsx dist/
+          ls -la dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<EOF
+          Bản thử nghiệm VNCCad $V cho kỹ sư test.
+
+          - **Windows (offline):** VNCCad-$V-windows-x64.zip → giải nén, chạy VNCCad.exe
+          - **Linux (offline):** VNCCad-$V-linux-x86_64.tar.gz → giải nén, chạy ./vnccad
+          - **Web (online):** https://maitrieuquang-max.github.io/VNCCAD/ (cài được như ứng dụng, chạy cả khi mất mạng)
+          - **Web cho máy chủ nội bộ:** VNCCad-$V-web.zip
+          - **Bộ test:** HUONG_DAN_TEST.html, PHIEU_TEST.xlsx, thư mục mau/ (bản vẽ, lisp, CSV mẫu) — đã có sẵn trong gói Windows/Linux
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --title "VNCCad $V (bản test)" --notes-file notes.md --prerelease

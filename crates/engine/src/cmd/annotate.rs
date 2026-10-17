@@ -444,7 +444,12 @@ fn run_leader(s: &mut Session, p: &Value) -> Result<Value> {
     }))?;
     let mut out = vec![h.hex()];
     if let (Some(t), Some(last)) = (str_param(p, "text"), pts.last()) {
-        let th = s.doc()?.dim_style(&style(s)).map(|d| d.text_height).unwrap_or(0.18);
+        // VNCCad: the leader text follows the dimension scale (DIMSCALE), like the arrow.
+        let th = {
+            let d = s.doc()?;
+            let k = d.header.f64("DIMSCALE", 1.0);
+            d.dim_style(&style(s)).map(|st| st.text_height * if st.scale > 0.0 { st.scale } else { k.max(1e-9) }).unwrap_or(0.18)
+        };
         out.push(
             s.add_entity(EntityKind::MText(MText {
                 insert: v3(*last + Vec2::new(th * 0.5, th * 0.5)),

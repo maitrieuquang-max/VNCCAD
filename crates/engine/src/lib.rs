@@ -1176,3 +1176,6 @@ fn default_clock() -> Option<fn() -> f64> {
         None
     }
 }
+
+#[cfg(test)]
+mod testkit_tests;

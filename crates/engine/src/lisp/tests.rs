@@ -525,3 +525,34 @@ fn grread_tracks_the_cursor() {
     // Moves outside grread are ignored.
     s.input(Input::Motion(Vec2::new(1.0, 1.0))).unwrap();
 }
+
+#[test]
+fn testkit_sample_lisp_works() {
+    let mut s = Session::new();
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging/testkit/mau/");
+    for f in ["coc_khoan_nhoi.csv", "nhap_xuat_toado.lsp"] {
+        let b = std::fs::read(format!("{dir}{f}")).unwrap();
+        s.execute("open", &json!({ "data": crate::cmd::file::base64_encode(&b), "name": f })).unwrap();
+    }
+    s.start("nhaptd").unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let circles = s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Circle(_))).count();
+    assert_eq!(circles, 6, "{:?}", s.log.iter().rev().take(5).collect::<Vec<_>>());
+    let out = std::env::temp_dir().join("vnc_testkit_out.csv").to_string_lossy().to_string();
+    s.start("xuattd").unwrap();
+    s.input(Input::Text("all".into())).unwrap();
+    s.input(Input::Enter).unwrap();
+    s.input(Input::Text(out.clone())).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.lines().count(), 7, "{text}");
+    s.start("daycs").unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    s.input(Input::Motion(Vec2::new(5.0, 5.0))).unwrap();
+    assert_eq!(s.temp_vectors.len(), 1);
+    s.input(Input::Point(Vec2::new(9.0, 9.0))).unwrap();
+    assert!(s.running.is_none());
+    s.start("lopmau").unwrap();
+    assert!(s.doc().unwrap().layer("COT_THEP").is_some(), "{:?}", s.log.iter().rev().take(3).collect::<Vec<_>>());
+}
