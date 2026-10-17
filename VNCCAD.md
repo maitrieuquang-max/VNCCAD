@@ -187,7 +187,7 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 
 ## Bản phát hành cho kỹ sư test
 
-Đẩy một tag `v…` (ví dụ `git tag v0.9.2-beta.1 && git push vnccad v0.9.2-beta.1`): CI build xong sẽ tạo một **Release** trên GitHub gồm gói Windows, Linux, web và bộ test (`packaging/testkit`: hướng dẫn HTML, phiếu test Excel, bản vẽ/lisp/CSV mẫu). Kịch bản test nằm trong `packaging/testkit/scenarios.json`; bản vẽ mẫu tạo lại bằng `cargo test -p cadcraft-engine --lib make_testkit_drawing -- --ignored`.
+Đẩy một tag `v…`, hoặc một commit lên `main` có dòng `[release v0.9.2-beta.1]` trong nội dung: CI build xong sẽ tạo một **Release** trên GitHub gồm gói Windows, Linux, web và bộ test (`packaging/testkit`: hướng dẫn HTML, phiếu test Excel, bản vẽ/lisp/CSV mẫu). Kịch bản test nằm trong `packaging/testkit/scenarios.json`; bản vẽ mẫu tạo lại bằng `cargo test -p cadcraft-engine --lib make_testkit_drawing -- --ignored`.
 
 ## Bản web trên GitHub Pages
 
