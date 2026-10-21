@@ -230,6 +230,18 @@ pub struct MText {
     pub contents: String,
     #[serde(default = "one")]
     pub line_spacing: f64,
+    /// VNCCad: background mask (MTEXT "Background Mask"): border offset factor and fill
+    /// colour (`None` = the drawing background).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<TextMask>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextMask {
+    /// Border offset factor (1.0 = tight around the text, 1.5 the AutoCAD default).
+    pub scale: f64,
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 fn attach_tl() -> u8 {
     1
@@ -436,6 +448,13 @@ pub struct Hatch {
     pub origin: Vec2,
     #[serde(default)]
     pub background: Option<Color>,
+    /// VNCCad: associative hatch — the boundary objects it follows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary: Vec<crate::Handle>,
+    /// VNCCad: internal points the boundary was traced from (empty: each boundary object is a
+    /// closed loop of its own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seeds: Vec<Vec2>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -868,6 +887,9 @@ impl EntityKind {
                 h.scale *= s;
                 h.angle = cadcraft_geom::norm_angle(h.angle + rot);
                 h.origin = m.apply(h.origin);
+                for p in &mut h.seeds {
+                    *p = m.apply(*p);
+                }
             }
             EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(t3),
             EntityKind::Face3d(f) => f.corners.iter_mut().for_each(t3),

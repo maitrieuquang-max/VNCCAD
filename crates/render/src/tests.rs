@@ -86,6 +86,8 @@ fn hatch_pattern_and_solid() {
         gradient: None,
         origin: Vec2::ZERO,
         background: None,
+        boundary: Vec::new(),
+        seeds: Vec::new(),
     };
     d.add(&Space::Model, Common::default(), EntityKind::Hatch(h.clone())).unwrap();
     let l = build(&d, &Space::Model, &Options::default());
@@ -114,6 +116,8 @@ fn hatch_too_dense_for_the_view_becomes_a_fill() {
         gradient: None,
         origin: Vec2::ZERO,
         background: None,
+        boundary: Vec::new(),
+        seeds: Vec::new(),
     };
     d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
     // Zoomed out so far that the 0.125 spacing is under half a pixel: one fill, no lines.
@@ -311,6 +315,7 @@ fn truetype_mtext_and_dimension_text() {
             style: "Standard".into(),
             contents: "A{\\C1;B}\\P\\S1/2;".into(),
             line_spacing: 1.0,
+            mask: None,
         }),
     )
     .unwrap();

@@ -443,7 +443,9 @@ impl Interactive for TableM {
             }
             (Some(_), Some(_), Input::Point(p)) => {
                 let t = self.table(*p);
-                s.add_entity(EntityKind::Table(t))?;
+                let h = s.add_entity(EntityKind::Table(t))?;
+                // VNCCad: type the cells straight away (the host opens the table editor).
+                s.ui_requests.push(("ui.edit".into(), serde_json::json!({ "handle": h.hex() })));
                 Ok(Step::Done)
             }
             (Some(_), Some(_), Input::Enter) => Ok(Step::Cancel),

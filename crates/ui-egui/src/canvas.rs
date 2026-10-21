@@ -78,9 +78,19 @@ impl HotGrip {
 
 /// Apply a hot grip at `to` (one undo step) and clear it.
 pub fn apply_hot_grip(app: &mut CadApp, to: Vec2) {
-    if let Some(g) = app.canvas.hot_grip.take()
-        && let Err(e) = app.session.grip_edit(g.handle, g.index, to, g.mode)
-    {
+    let extra = std::mem::take(&mut app.canvas.hot_set);
+    let Some(g) = app.canvas.hot_grip.take() else { return };
+    // VNCCad: several hot grips (Shift+click) stretch together.
+    if g.mode == cadcraft_engine::grips::GripMode::Stretch && extra.iter().any(|x| *x != (g.handle, g.index)) {
+        let mut grips: Vec<serde_json::Value> = vec![serde_json::json!([g.handle.hex(), g.index])];
+        grips.extend(extra.iter().filter(|x| **x != (g.handle, g.index)).map(|(h, i)| serde_json::json!([h.hex(), i])));
+        let d = to - g.base;
+        if let Err(e) = app.run("grip.multi", serde_json::json!({ "grips": grips, "delta": [d.x, d.y] })) {
+            app.session.echo(e);
+        }
+        return;
+    }
+    if let Err(e) = app.session.grip_edit(g.handle, g.index, to, g.mode) {
         app.session.echo(e.to_string());
     }
 }
@@ -111,8 +121,12 @@ pub struct CanvasState {
     pub cursor: Option<Vec2>,
     pub polar_angle: Option<f64>,
     pan_last: Option<Pos2>,
+    /// VNCCad: where the left button went down (drag-release completes a window or a grip).
+    press_at: Option<Pos2>,
     /// A hot (clicked) grip being dragged: entity, grip index, grip position, mode.
     pub hot_grip: Option<HotGrip>,
+    /// VNCCad: grips made hot with Shift+click (stretched together with the clicked one).
+    pub hot_set: Vec<(Handle, usize)>,
     /// Zoom to extents once the canvas size is known (after opening a drawing).
     pub zoom_pending: bool,
     pub build_ms: f64,
@@ -535,14 +549,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     app.canvas.xf = Some(xf);
 
     // ---------- input ----------
+    // VNCCad: act on the button press, not on a "click" (press + release without moving):
+    // a hand that moves a pixel while clicking used to lose the click, so points and
+    // selections often needed two tries.
     let (hover_pos, scroll, mods, middle_down, pressed_primary, pressed_secondary, dbl_middle, dbl_primary) = ui.input(|i| {
         (
             i.pointer.hover_pos(),
             i.smooth_scroll_delta.y,
             i.modifiers,
             i.pointer.middle_down(),
-            i.pointer.primary_clicked(),
-            i.pointer.secondary_clicked(),
+            i.pointer.primary_pressed(),
+            i.pointer.secondary_pressed(),
             i.pointer.button_double_clicked(egui::PointerButton::Middle),
             i.pointer.button_double_clicked(egui::PointerButton::Primary),
         )
@@ -596,8 +613,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Err(_) => (xf, None),
     };
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
+    // VNCCad: double-clicking an object on the sheet (text, table…) edits it instead.
+    let dbl_on_object = dbl_primary
+        && hover_pos.is_some_and(|hp| {
+            let Ok(st) = app.session.state() else { return false };
+            let w = if st.mspace.is_some() { xf.to_world(hp) } else { xf_paper.to_world(hp) };
+            cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+                .and_then(|h| st.doc.entity(h))
+                .is_some_and(|e| !matches!(e.kind, cadcraft_doc::EntityKind::Viewport(_)))
+        });
     if inside
         && dbl_primary
+        && !dbl_on_object
         && app.session.running.is_none()
         && matches!(app.session.layout_space(), cadcraft_doc::Space::Paper(_))
         && let Some(hp) = hover_pos
@@ -614,6 +641,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
 
+    if !app.canvas.hot_set.is_empty() && (app.session.running.is_some() || app.session.selection().is_empty()) {
+        app.canvas.hot_set.clear();
+    }
     let raw_world = hover_pos.filter(|_| inside).map(|p| xf.to_world(p));
     if let Some(w) = raw_world {
         let eff = effective_point(app, w, &xf);
@@ -631,6 +661,45 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.snap = None;
     }
 
+    // Press-drag-release: a window selection (or a grip move) finishes where the button
+    // comes up, as in AutoCAD, as well as with a second click.
+    let released_primary = ui.input(|i| i.pointer.primary_released());
+    if released_primary
+        && let (Some(at), Some(hp)) = (app.canvas.press_at.take(), hover_pos)
+        && inside
+        && at.distance(hp) > 6.0
+        && let Some(p) = app.canvas.cursor
+    {
+        if app.session.pending_window.is_some() {
+            let r = if app.session.running.is_some() {
+                app.session.input(Input::Point(raw_world.unwrap_or(p)))
+            } else {
+                app.session.idle_click(raw_world.unwrap_or(p), mods.shift)
+            };
+            if let Err(e) = r {
+                app.session.echo(e.to_string());
+            }
+        } else if app.canvas.hot_grip.is_some() && app.session.running.is_none() {
+            apply_hot_grip(app, p);
+        }
+    }
+    if pressed_primary && inside {
+        app.canvas.press_at = hover_pos;
+    }
+    // Double-click on an object with no command running edits it (text in place, etc.).
+    if inside
+        && dbl_primary
+        && app.session.running.is_none()
+        && app.canvas.hot_grip.is_none()
+        && let Some(w) = raw_world
+        && let Ok(st) = app.session.state()
+        && let Some(h) = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+    {
+        app.session.pending_window = None;
+        app.session.set_selection(vec![h]);
+        crate::vdlg::open_edit(app, h);
+        return;
+    }
     // Clicks.
     if inside
         && pressed_primary
@@ -644,6 +713,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         } else if app.canvas.hot_grip.is_some() {
             apply_hot_grip(app, p);
+        } else if let Some(g) = grip_at(app, &xf, hover_pos)
+            && mods.shift
+        {
+            // Shift+click: add (or remove) a grip from the hot set.
+            let k = (g.handle, g.index);
+            if let Some(i) = app.canvas.hot_set.iter().position(|x| *x == k) {
+                app.canvas.hot_set.remove(i);
+            } else {
+                app.canvas.hot_set.push(k);
+            }
+            app.session.echo(format!("{} grip nóng — bấm một grip để kéo tất cả cùng lúc.", app.canvas.hot_set.len()));
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
             app.canvas.hot_grip = Some(g);
             app.session.echo(g.label());
@@ -766,7 +846,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     let sp = xf.to_screen(g);
                     if rect.contains(sp) {
                         let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
-                        let hot = app.canvas.hot_grip.is_some_and(|hg| hg.handle == *h && hg.index == gi);
+                        let hot = app.canvas.hot_grip.is_some_and(|hg| hg.handle == *h && hg.index == gi) || app.canvas.hot_set.contains(&(*h, gi));
                         let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
                         painter.rect_filled(
                             r,
@@ -795,7 +875,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 k.transform(&m);
                 Some(k)
             }
-            None if g.mode == cadcraft_engine::grips::GripMode::Stretch => cadcraft_engine::grips::stretch_grip(&e.kind, g.index, c),
+            None if g.mode == cadcraft_engine::grips::GripMode::Stretch => {
+                // The other hot grips of this object move along.
+                let orig = e.kind.grips();
+                let d = c - g.base;
+                let mut k = cadcraft_engine::grips::stretch_grip(&e.kind, g.index, c);
+                for (h, i) in &app.canvas.hot_set {
+                    if *h == g.handle
+                        && *i != g.index
+                        && let (Some(kk), Some(at)) = (k.as_ref(), orig.get(*i))
+                    {
+                        k = cadcraft_engine::grips::stretch_grip(kk, *i, *at + d).or(k);
+                    }
+                }
+                k
+            }
             None => None,
         };
         if let Some(k) = k {

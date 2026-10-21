@@ -26,6 +26,7 @@ pub mod quick;
 pub mod selftest;
 pub mod theme;
 pub mod toolpal;
+pub mod vdlg;
 
 use std::sync::mpsc::Receiver;
 
@@ -141,6 +142,8 @@ pub struct CadApp {
     pub adc_kind: String,
     /// VNCCad: the "add a command tool" fields.
     pub new_tool: (String, String),
+    /// VNCCad: the object editor, units, styles, plot and alias dialogs.
+    pub vd: vdlg::VState,
 }
 
 impl CadApp {
@@ -166,6 +169,7 @@ impl CadApp {
             adc_doc: None,
             adc_kind: "blocks".into(),
             new_tool: (String::new(), String::new()),
+            vd: vdlg::VState::default(),
         }
     }
 
@@ -201,6 +205,9 @@ impl CadApp {
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
+        let lower = name.trim().to_ascii_lowercase();
+        let name = self.session.user_aliases.get(&lower).cloned().unwrap_or_else(|| name.to_string());
+        let name = name.as_str();
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             return;
         }
@@ -212,8 +219,9 @@ impl CadApp {
     /// Submit a line of command-line text.
     pub fn cmdline(&mut self, text: &str) {
         if self.session.running.is_none() {
-            let first = text.split_whitespace().next().unwrap_or("");
-            if !first.is_empty() && menus::run_ui_command(self, &first.to_ascii_lowercase(), &Value::Null).is_some() {
+            let first = text.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+            let first = self.session.user_aliases.get(&first).cloned().unwrap_or(first);
+            if !first.is_empty() && !text.contains('{') && menus::run_ui_command(self, &first, &Value::Null).is_some() {
                 return;
             }
         }
@@ -255,7 +263,7 @@ impl CadApp {
         let lower = name.to_ascii_lowercase();
         let font = [".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
         let support = font
-            || [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".txt", ".csv", ".dat", ".xyz", ".tsv", ".vnss"]
+            || [".lsp", ".fas", ".vlx", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".txt", ".csv", ".dat", ".xyz", ".tsv", ".vnss"]
                 .iter()
                 .any(|e| lower.ends_with(e));
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
@@ -277,10 +285,12 @@ impl CadApp {
         } else {
             let lower = path.to_ascii_lowercase();
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
-            let support =
-                [".lsp", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf", ".txt", ".csv", ".dat", ".xyz", ".tsv", ".vnss"]
-                    .iter()
-                    .any(|e| lower.ends_with(e));
+            let support = [
+                ".lsp", ".fas", ".vlx", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf", ".txt", ".csv", ".dat", ".xyz",
+                ".tsv", ".vnss",
+            ]
+            .iter()
+            .any(|e| lower.ends_with(e));
             // A drawing inserted as a block (INSERT running) keeps the view.
             if !support && self.session.running.is_none() {
                 self.ui.start_tab = false;

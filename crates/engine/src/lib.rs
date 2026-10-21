@@ -190,6 +190,8 @@ impl DocState {
             } else {
                 let center = v.center - (pv.center - vp.center.xy()) * k;
                 let height = vp.height * k;
+                // VNCCad: redraw at once (panning inside a viewport used to show nothing new).
+                self.revision = self.revision.wrapping_add(1);
                 let doc = Arc::make_mut(&mut self.doc);
                 if let Some(store) = doc.space_mut(&self.space.clone()) {
                     store.modify(h, |e| {
@@ -309,6 +311,15 @@ pub struct Running {
     pub doc_uid: u64,
 }
 
+/// VNCCad: a point modifier typed at a point prompt — TK/TT temporary tracking points or FROM
+/// (base point + offset). While one is active it answers the clicks and typed points itself and
+/// hands the command a single resulting point.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PointMod {
+    Track(Vec<Vec2>),
+    From(Option<Vec2>),
+}
+
 /// A pending window/crossing selection started by a click on empty space.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct PendingWindow {
@@ -332,6 +343,10 @@ pub struct Session {
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
+    /// VNCCad: command aliases the user made (ALIASEDIT), alias → command; REINIT reloads them.
+    pub user_aliases: std::collections::BTreeMap<String, String>,
+    /// VNCCad: an active TK / FROM point modifier.
+    pub point_mod: Option<PointMod>,
     pub pending_window: Option<PendingWindow>,
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
@@ -390,6 +405,8 @@ impl Session {
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
+            user_aliases: Default::default(),
+            point_mod: None,
             pending_window: None,
             untitled_counter: 0,
             last_dim: None,
@@ -440,7 +457,12 @@ impl Session {
     }
     /// Copy-on-write access to the drawing.
     pub fn doc_mut(&mut self) -> Result<&mut Drawing> {
-        Ok(Arc::make_mut(&mut self.state_mut()?.doc))
+        // VNCCad: every change shows at once. Changing a drawing nothing else shares happens in
+        // place (same pointer), so the revision is what tells the display to redraw — the
+        // second segment of a LINE used to stay invisible until the next zoom.
+        let st = self.state_mut()?;
+        st.revision = st.revision.wrapping_add(1);
+        Ok(Arc::make_mut(&mut st.doc))
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
@@ -563,7 +585,11 @@ impl Session {
             Some(n) => (true, n),
             None => (false, name),
         };
-        let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
+        let mut lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
+        // VNCCad: the user's own aliases (ALIASEDIT) come first.
+        if let Some(t) = self.user_aliases.get(&lower) {
+            lower = t.trim().trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
+        }
         let id = cmd::resolve_alias(&lower);
         let Some(spec) = find_command(&id) else {
             // VNCCad: a C: command defined in LISP.
@@ -660,11 +686,53 @@ impl Session {
             }
             return Ok(());
         }
+        let Some(input) = self.point_modifier(input)? else { return Ok(()) };
         // Generic selection handling during "Select objects:" prompts.
         let input = self.preprocess_selection(input)?;
         match input {
             Some(i) => self.feed(Some(i)),
             None => Ok(()),
+        }
+    }
+
+    /// VNCCad: TK (temporary tracking) and FROM answer point input until they give the point.
+    fn point_modifier(&mut self, input: Input) -> Result<Option<Input>> {
+        let Some(m) = self.point_mod.clone() else { return Ok(Some(input)) };
+        match (m, input) {
+            (_, Input::Cancel) => {
+                self.point_mod = None;
+                Ok(Some(Input::Cancel))
+            }
+            (PointMod::Track(mut pts), Input::Point(p)) => {
+                let q = match pts.last() {
+                    Some(prev) => snap::ortho_ucs(*prev, p, &self.ucs()),
+                    None => p,
+                };
+                pts.push(q);
+                self.last_point = q;
+                self.point_mod = Some(PointMod::Track(pts));
+                self.echo(format!("Điểm bám: {:.4}, {:.4}", q.x, q.y));
+                Ok(None)
+            }
+            (PointMod::Track(pts), Input::Enter) => {
+                self.point_mod = None;
+                Ok(pts.last().map(|p| Input::Point(*p)))
+            }
+            (PointMod::From(None), Input::Point(p)) => {
+                self.last_point = p;
+                self.point_mod = Some(PointMod::From(Some(p)));
+                Ok(None)
+            }
+            (PointMod::From(Some(_)), Input::Point(p)) => {
+                self.point_mod = None;
+                Ok(Some(Input::Point(p)))
+            }
+            (PointMod::From(_), Input::Enter) => {
+                self.point_mod = None;
+                Ok(None)
+            }
+            (_, Input::Motion(_)) => Ok(None),
+            (_, _) => Err(EngineError::Other("Cần một điểm (TK: Enter để kết thúc bám điểm).".into())),
         }
     }
 
@@ -763,6 +831,7 @@ impl Session {
 
     fn finish(&mut self, run: Running, cancelled: bool) {
         self.pending_window = None;
+        self.point_mod = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         if run.id == "lisp" {
             let label = std::mem::take(&mut self.lisp_label);
@@ -821,7 +890,20 @@ impl Session {
     }
 
     pub fn current_prompt(&self) -> Option<Prompt> {
-        self.running.as_ref().map(|r| r.machine.prompt(self))
+        let p = self.running.as_ref().map(|r| r.machine.prompt(self))?;
+        Some(match &self.point_mod {
+            Some(PointMod::Track(pts)) => {
+                let msg = if pts.is_empty() { "First tracking point" } else { "Next point (Press ENTER to end tracking)" };
+                let q = Prompt::new(msg, Accept::POINT);
+                match pts.last() {
+                    Some(b) => q.base(*b),
+                    None => q,
+                }
+            }
+            Some(PointMod::From(None)) => Prompt::new("Base point", Accept::POINT),
+            Some(PointMod::From(Some(b))) => Prompt::new("<Offset>", Accept::POINT).base(*b),
+            None => p,
+        })
     }
 
     /// The text shown on the command line: the active prompt, or "Command:".
@@ -930,6 +1012,21 @@ impl Session {
         {
             return self.input(Input::Keyword(k));
         }
+        if prompt.accept.point && !prompt.accept.select && self.point_mod.is_none() {
+            match tt.to_ascii_lowercase().trim_start_matches('_') {
+                "tk" | "tt" | "tra" | "track" | "tracking" => {
+                    self.point_mod = Some(PointMod::Track(Vec::new()));
+                    self.echo("Bám điểm tạm (TK): chọn các điểm bám, Enter để kết thúc.");
+                    return Ok(());
+                }
+                "fro" | "from" => {
+                    self.point_mod = Some(PointMod::From(None));
+                    self.echo("FROM: chọn điểm gốc, rồi nhập độ lệch (@dx,dy).");
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         if prompt.accept.point {
             let ucs = self.ucs();
             if let Some(p) = prompt::parse_point_ucs(tt, self.last_point, &ucs) {
@@ -940,7 +1037,7 @@ impl Session {
                 && !prompt.accept.number
             {
                 let mut c = self.cursor;
-                if self.settings.orthomode {
+                if self.settings.orthomode || matches!(self.point_mod, Some(PointMod::Track(_))) {
                     c = snap::ortho_ucs(base, c, &ucs);
                 }
                 let dir = (c - base).normalized();

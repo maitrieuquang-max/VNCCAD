@@ -79,6 +79,12 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
         *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
     };
     let no_path = params.is_null() || (params.get("path").is_none() && params.get("data").is_none());
+    // VNCCad: dialogs for UNITS, STYLE, DIMSTYLE, PLOT, PAGESETUP, ALIASEDIT, REINIT, XREF.
+    if params.is_null()
+        && let Some(r) = crate::vdlg::route(app, id)
+    {
+        return Some(r);
+    }
     let r = match id {
         "blockfromfile" if no_path => {
             app.session.insert_next_open = true;
@@ -249,7 +255,8 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
-        "plot" | "exportpdf" | "publish" if params.is_null() => {
+        "plot.now" | "exportpdf" | "publish" if params.is_null() => {
+            let id = if id == "plot.now" { "plot" } else { id };
             let stem = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing".into());
             let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(a, _)| a).to_string();
             let name = format!("{stem}.pdf");
@@ -278,6 +285,12 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
         }
         "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
+        "ui.edit" => {
+            if let Some(h) = params.get("handle").and_then(Value::as_str).and_then(cadcraft_doc::Handle::parse_hex) {
+                crate::vdlg::open_edit(app, h);
+            }
+            Ok(Value::Null)
+        }
         "ui.sample" => {
             let d = cadcraft_engine::sample::default_sample();
             app.session.open_drawing(d, "Bracket", None);
@@ -497,6 +510,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd_shift, Key::C), "copybase"),
         (sc(cmd, Key::C), "copyclip"),
         (sc(cmd, Key::X), "cutclip"),
+        (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.toggle.palettes"),
         (sc(cmd, Key::Num2), "adcenter"),
@@ -515,13 +529,34 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         return;
     }
     let mut fire = Vec::new();
+    // VNCCad: the desktop turns Ctrl+C / Ctrl+X / Ctrl+V into clipboard events (no key event
+    // reaches us), and Ctrl+V only when the system clipboard holds text.
+    ctx.input(|i| {
+        for ev in &i.events {
+            let id = match ev {
+                egui::Event::Copy if i.modifiers.shift => "copybase",
+                egui::Event::Copy => "copyclip",
+                egui::Event::Cut => "cutclip",
+                egui::Event::Paste(_) if i.modifiers.shift => "pasteblock",
+                egui::Event::Paste(_) => "pasteclip",
+                _ => continue,
+            };
+            if !fire.contains(&id) {
+                fire.push(id);
+            }
+        }
+    });
     ctx.input_mut(|i| {
         for (s, id) in pairs {
-            if i.consume_shortcut(s) {
+            if i.consume_shortcut(s) && !fire.contains(id) {
                 fire.push(*id);
             }
         }
     });
+    if fire.iter().any(|id| ["copyclip", "cutclip", "copybase"].contains(id)) {
+        // Something in the system clipboard, so that Ctrl+V comes back as a paste event.
+        ctx.copy_text("VNCCad".into());
+    }
     for id in fire {
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode"].contains(&id);

@@ -51,6 +51,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                 }
                 egui::Event::Key { key: Key::Escape, pressed: true, .. } => {
                     app.canvas.hot_grip = None;
+                    app.canvas.hot_set.clear();
                     app.cmd.buffer.clear();
                     app.session.echo("*Cancel*");
                 }

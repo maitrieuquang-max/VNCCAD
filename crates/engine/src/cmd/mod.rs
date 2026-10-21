@@ -17,7 +17,7 @@ pub mod file;
 pub mod flow;
 mod gripcmds;
 pub mod group;
-mod hatch;
+pub(crate) mod hatch;
 pub mod importdefs;
 mod inquiry;
 mod layer;
@@ -30,6 +30,7 @@ mod more;
 mod props;
 pub mod publish;
 mod qselect;
+pub mod quickfix;
 pub mod raster;
 pub mod road;
 mod settings;
@@ -206,6 +207,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mltol::specs());
         v.extend(sketch::specs());
         v.extend(sheetset::specs());
+        v.extend(quickfix::specs());
         v
     })
 }

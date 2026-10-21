@@ -681,6 +681,7 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         ["paper", "width", "height", "landscape", "margins", "lineweights", "plotArea", "scale", "scaleToFit", "center", "plotStyleTable", "window"];
     let changes = keys.iter().any(|k| p.get(k).is_some());
     let name = match (str_param(p, "layout"), s.space()) {
+        (Some(n), _) if n.eq_ignore_ascii_case("model") => None,
         (Some(n), _) => Some(layout_name(cmd, s.doc()?, n)?),
         (None, Space::Paper(n)) => Some(n),
         (None, Space::Model) => None,

@@ -15,6 +15,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? | handles?, color1?, color2?, angle?}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
+        CommandSpec::new("hatchgenerateboundary", "Generate Boundary", run_genboundary)
+            .menu(&["Modify", "Object", "Hatch Generate Boundary"])
+            .alias(&["hgb", "taobien"])
+            .params("{handles?} (closed polylines around the selected hatches, which then follow them)")
+            .interactive(|_| Ok(Box::new(super::flow::Flow::new("hatchgenerateboundary", plan_genboundary, flow_genboundary)))),
         CommandSpec::new("hatchedit", "Hatch Edit", run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he"]).params("{handles?, pattern?, scale?, angle?}"),
     ]
 }
@@ -53,7 +58,7 @@ fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> Vec<Vec<Vec2>>
 }
 
 /// Closed loops of entities that are closed curves (for islands and "select objects").
-fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
+pub(crate) fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
     match &e.kind {
         EntityKind::Circle(c) => {
             let ctr = c.center.xy();
@@ -82,8 +87,48 @@ fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
 
 /// Boundary loops (outer + islands) around an internal point.
 pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
-    let d = s.doc()?;
-    let space = s.space();
+    loops_at_doc(s.doc()?, &s.space(), p)
+}
+
+/// VNCCad: the objects a traced boundary runs along (an associative hatch follows them).
+pub(crate) fn boundary_objects(d: &Drawing, space: &Space, loops: &[HatchLoop]) -> Vec<Handle> {
+    let Some(store) = d.space(space) else { return Vec::new() };
+    let mut lb = Bounds2::EMPTY;
+    for l in loops {
+        for v in &l.vertices {
+            lb.add(v.p);
+        }
+    }
+    let tol = ((lb.width() + lb.height()) * 1e-6).max(1e-9);
+    let pts: Vec<Vec2> = loops
+        .iter()
+        .flat_map(|l| {
+            let n = l.vertices.len();
+            (0..n).flat_map(move |i| {
+                let a = l.vertices[i].p;
+                let b = l.vertices[(i + 1) % n].p;
+                [a, a.mid(b)]
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    for e in store.iter() {
+        if !d.is_visible(e) || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_)) {
+            continue;
+        }
+        let eb = entity_bounds(d, e, 0);
+        if !eb.expand(tol * 10.0).intersects(&lb) {
+            continue;
+        }
+        if pts.iter().any(|q| crate::select::entity_distance(d, e, *q, tol) <= tol * 10.0) {
+            out.push(e.handle);
+        }
+    }
+    out
+}
+
+pub(crate) fn loops_at_doc(d: &Drawing, space: &Space, p: Vec2) -> Result<Vec<HatchLoop>> {
+    let space = space.clone();
     let ext = d.extents(&space);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
     let polys = outlines(d, &space, None);
@@ -134,6 +179,8 @@ struct HatchSettings {
     angle: f64,
     gradient: Option<Gradient>,
     associative: bool,
+    /// VNCCad: also draw the boundary as closed polylines (HATCH "Retain boundaries").
+    retain: bool,
 }
 
 impl HatchSettings {
@@ -157,6 +204,7 @@ impl HatchSettings {
             angle: p.get("angle").and_then(Value::as_f64).map(f64::to_radians).unwrap_or(hdr.2),
             gradient: g,
             associative: bool_or(p, "associative", true),
+            retain: bool_or(p, "retain", false),
         }
     }
     fn hatch(&self, loops: Vec<HatchLoop>) -> EntityKind {
@@ -173,6 +221,8 @@ impl HatchSettings {
             gradient: self.gradient.clone(),
             origin: Vec2::ZERO,
             background: None,
+            boundary: Vec::new(),
+            seeds: Vec::new(),
         })
     }
 }
@@ -180,24 +230,102 @@ impl HatchSettings {
 fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
     let st = HatchSettings::from(s, p, gradient);
     let mut loops = Vec::new();
+    let mut seeds = Vec::new();
+    let mut objs = Vec::new();
     if let Some(pts) = points_param(p, "points") {
         for q in pts {
             loops.extend(loops_at(s, q)?);
+            seeds.push(q);
         }
     } else {
         let hs = targets(s, p)?;
         loops = loops_from_handles(s, &hs)?;
+        objs = hs;
     }
     if loops.is_empty() {
         return Err(bad("hatch", "give internal `points` or boundary `handles`"));
     }
-    let h = s.add_entity(st.hatch(loops))?;
-    // Hatches go under other objects (HPDRAWORDER = behind boundary).
+    let h = add_hatch(s, &st, loops, seeds, objs)?;
+    Ok(json!({ "handle": h.hex() }))
+}
+
+/// Add a hatch (behind other objects) with its associativity: the boundary objects it follows,
+/// or new boundary polylines when `retain` is on.
+fn add_hatch(s: &mut Session, st: &HatchSettings, loops: Vec<HatchLoop>, seeds: Vec<Vec2>, objs: Vec<Handle>) -> Result<Handle> {
     let space = s.space();
+    let (boundary, seeds) = if st.retain {
+        let mut hs = Vec::new();
+        for l in &loops {
+            hs.push(s.add_entity(lwpoly(l.vertices.clone(), true))?);
+        }
+        (hs, Vec::new())
+    } else if !seeds.is_empty() {
+        let d = s.doc()?;
+        let b = boundary_objects(d, &space, &loops);
+        // Loops that are each one closed object need no tracing.
+        let closed = b.iter().filter(|h| d.entity(**h).is_some_and(|e| closed_loop(d, e).is_some())).count();
+        if closed == loops.len() && closed == b.len() { (b, Vec::new()) } else { (b, seeds) }
+    } else {
+        (objs, Vec::new())
+    };
+    let mut k = st.hatch(loops);
+    if let EntityKind::Hatch(hh) = &mut k
+        && st.associative
+    {
+        hh.boundary = boundary;
+        hh.seeds = seeds;
+    }
+    let h = s.add_entity(k)?;
+    // Hatches go under other objects (HPDRAWORDER = behind boundary).
     if let Some(store) = s.doc_mut()?.space_mut(&space) {
         store.send_to_back(h);
     }
-    Ok(json!({ "handle": h.hex() }))
+    Ok(h)
+}
+
+// ---------------------------------------------------------------- HATCHGENERATEBOUNDARY
+
+fn plan_genboundary(_s: &Session, a: &[super::flow::Ans]) -> Option<super::flow::Ask> {
+    a.is_empty().then(|| super::flow::Ask::Select("Select hatch objects".into()))
+}
+
+fn flow_genboundary(s: &mut Session, a: &[super::flow::Ans]) -> Result<Value> {
+    let hs = a.first().map(|x| x.sel().to_vec()).unwrap_or_default();
+    gen_boundary(s, &hs)
+}
+
+fn run_genboundary(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    gen_boundary(s, &hs)
+}
+
+fn gen_boundary(s: &mut Session, hs: &[Handle]) -> Result<Value> {
+    let mut made = 0;
+    for h in hs {
+        let Some((loops, common)) = s.doc()?.entity(*h).and_then(|e| match &e.kind {
+            EntityKind::Hatch(x) => Some((x.loops.clone(), e.common.clone())),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let mut b = Vec::new();
+        for l in loops {
+            let nh = s.add_entity(lwpoly(l.vertices, true))?;
+            let layer = common.layer.clone();
+            s.doc_mut()?.modify_entity(nh, |e| e.common.layer = layer)?;
+            b.push(nh);
+            made += 1;
+        }
+        s.doc_mut()?.modify_entity(*h, |e| {
+            if let EntityKind::Hatch(x) = &mut e.kind {
+                x.associative = true;
+                x.boundary = b;
+                x.seeds.clear();
+            }
+        })?;
+    }
+    s.set_selection(Vec::new());
+    Ok(json!({ "created": made, "message": format!("Đã tạo {made} đường bao (hatch đi theo đường bao).") }))
 }
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -259,13 +387,23 @@ struct HatchM {
     gradient: bool,
     settings: HatchSettings,
     loops: Vec<HatchLoop>,
+    seeds: Vec<Vec2>,
+    objs: Vec<Handle>,
     asking: Option<&'static str>,
     selecting: bool,
 }
 
 impl HatchM {
     fn new(s: &Session, gradient: bool) -> Self {
-        HatchM { gradient, settings: HatchSettings::from(s, &Value::Null, gradient), loops: Vec::new(), asking: None, selecting: false }
+        HatchM {
+            gradient,
+            settings: HatchSettings::from(s, &Value::Null, gradient),
+            loops: Vec::new(),
+            seeds: Vec::new(),
+            objs: Vec::new(),
+            asking: None,
+            selecting: false,
+        }
     }
 }
 
@@ -289,7 +427,16 @@ impl Interactive for HatchM {
         if self.selecting {
             return Prompt::new("Select objects", Accept::SELECT);
         }
-        Prompt::new("Pick internal point", Accept::POINT).kw(&["Select objects", "Undo", "seTtings", "Pattern", "sCale", "Angle"])
+        Prompt::new("Pick internal point", Accept::POINT).kw(&[
+            "Select objects",
+            "Undo",
+            "seTtings",
+            "Pattern",
+            "sCale",
+            "Angle",
+            "Retain boundary",
+            "Associative",
+        ])
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(a) = self.asking.take() {
@@ -326,7 +473,10 @@ impl Interactive for HatchM {
         if self.selecting {
             match i {
                 Input::Pick(hs) => match loops_from_handles(s, &hs) {
-                    Ok(l) => self.loops.extend(l),
+                    Ok(l) => {
+                        self.loops.extend(l);
+                        self.objs.extend(hs);
+                    }
                     Err(e) => s.echo(e.to_string()),
                 },
                 Input::Enter => self.selecting = false,
@@ -340,6 +490,7 @@ impl Interactive for HatchM {
                     Ok(l) => {
                         s.echo(format!("Analyzing the selected data... {} loop(s)", l.len()));
                         self.loops.extend(l);
+                        self.seeds.push(p);
                     }
                     Err(e) => s.echo(e.to_string()),
                 }
@@ -350,6 +501,16 @@ impl Interactive for HatchM {
                     "Select objects" => self.selecting = true,
                     "Undo" => {
                         self.loops.clear();
+                        self.seeds.clear();
+                        self.objs.clear();
+                    }
+                    "Retain boundary" => {
+                        self.settings.retain = !self.settings.retain;
+                        s.echo(format!("Giữ đường bao (polyline): {}", if self.settings.retain { "Có" } else { "Không" }));
+                    }
+                    "Associative" => {
+                        self.settings.associative = !self.settings.associative;
+                        s.echo(format!("Hatch liên kết đường bao: {}", if self.settings.associative { "Có" } else { "Không" }));
                     }
                     "Pattern" | "seTtings" => self.asking = Some("Enter a pattern name"),
                     "sCale" => self.asking = Some("Specify a scale for the hatch pattern"),
@@ -359,12 +520,11 @@ impl Interactive for HatchM {
             }
             Input::Enter => {
                 if !self.loops.is_empty() {
-                    let k = self.settings.hatch(std::mem::take(&mut self.loops));
-                    let h = s.add_entity(k)?;
-                    let space = s.space();
-                    if let Some(store) = s.doc_mut()?.space_mut(&space) {
-                        store.send_to_back(h);
-                    }
+                    let loops = std::mem::take(&mut self.loops);
+                    let seeds = if self.objs.is_empty() { std::mem::take(&mut self.seeds) } else { Vec::new() };
+                    let objs = std::mem::take(&mut self.objs);
+                    let st = self.settings.clone();
+                    add_hatch(s, &st, loops, seeds, objs)?;
                 }
                 Ok(Step::Done)
             }

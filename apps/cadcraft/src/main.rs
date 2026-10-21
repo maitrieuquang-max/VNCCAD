@@ -59,12 +59,12 @@ fn services() -> Services {
                 .add_filter(
                     "Tất cả VNCCad mở được",
                     &[
-                        "dxf", "dwg", "vnss", "lsp", "dcl", "sld", "scr", "shx", "ctb", "ttf", "ttc", "otf", "png", "jpg", "jpeg", "bmp", "tif",
-                        "tiff", "pdf",
+                        "dxf", "dwg", "vnss", "lsp", "fas", "vlx", "dcl", "sld", "scr", "shx", "ctb", "ttf", "ttc", "otf", "png", "jpg", "jpeg",
+                        "bmp", "tif", "tiff", "pdf",
                     ],
                 )
                 .add_filter("Font SHX", &["shx"])
-                .add_filter("AutoLISP, DCL, Script", &["lsp", "dcl", "sld", "scr"])
+                .add_filter("AutoLISP, DCL, Script", &["lsp", "fas", "vlx", "dcl", "sld", "scr"])
                 .add_filter("Dữ liệu cho LISP (TXT, CSV)", &["txt", "csv", "dat", "xyz", "tsv"])
                 .add_filter("Bộ bản vẽ (VNSS)", &["vnss"])
                 .add_filter("Ảnh, PDF nền", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"])

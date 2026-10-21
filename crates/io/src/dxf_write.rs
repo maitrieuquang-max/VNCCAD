@@ -551,6 +551,28 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(50, t.rotation.to_degrees());
             }
             w.f(44, t.line_spacing);
+            if let Some(m) = &t.mask {
+                // 90: 1 = fill with colour 63, 3 = fill with the drawing background.
+                match m.color {
+                    Some(c) => {
+                        w.i(90, 1);
+                        let idx = match c {
+                            cadcraft_doc::color::Color::Index(i) => i64::from(i),
+                            _ => 7,
+                        };
+                        w.i(63, idx);
+                        if let cadcraft_doc::color::Color::True(r) = c {
+                            w.i(421, (i64::from(r.0) << 16) | (i64::from(r.1) << 8) | i64::from(r.2));
+                        }
+                    }
+                    None => {
+                        w.i(90, 3);
+                        w.i(63, 256);
+                    }
+                }
+                w.f(45, m.scale);
+                w.i(441, 0);
+            }
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -802,7 +824,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(70, i64::from(h.solid));
             w.i(71, i64::from(h.associative));
             w.i(91, h.loops.len() as i64);
-            for l in &h.loops {
+            for (li, l) in h.loops.iter().enumerate() {
                 w.i(92, 2 | if l.outer { 1 } else { 0 });
                 let has_bulge = l.vertices.iter().any(|v| v.bulge != 0.0);
                 w.i(72, i64::from(has_bulge));
@@ -814,7 +836,15 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.f(42, v.bulge);
                     }
                 }
-                w.i(97, 0);
+                // VNCCad: the boundary objects of an associative hatch (all on the first loop).
+                if li == 0 && h.associative && !h.boundary.is_empty() {
+                    w.i(97, h.boundary.len() as i64);
+                    for b in &h.boundary {
+                        w.s(330, b.hex());
+                    }
+                } else {
+                    w.i(97, 0);
+                }
             }
             w.i(75, i64::from(h.style));
             w.i(76, 1);
@@ -840,7 +870,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     }
                 }
             }
-            w.i(98, 0);
+            w.i(98, h.seeds.len() as i64);
+            for sd in &h.seeds {
+                w.p2(10, *sd);
+            }
         }
         EntityKind::Viewport(v) => {
             w.s(0, "VIEWPORT");
@@ -1029,6 +1062,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 style: style.text_style.clone(),
                 contents: g.value.clone(),
                 line_spacing: 1.0,
+                mask: None,
             }),
         });
     }
@@ -1094,6 +1128,7 @@ fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
                     style: "Standard".into(),
                     contents: if cell.text.trim_start().starts_with('=') { t.display_text(r, col) } else { cell.text.clone() },
                     line_spacing: 1.0,
+                    mask: None,
                 }),
             });
         }

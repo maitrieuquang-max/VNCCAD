@@ -28,10 +28,15 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
                 let list = cadcraft_render::build_entities(
                     d,
                     std::iter::once(e),
-                    &cadcraft_render::Options { tolerance: tol, text: false, ..Default::default() },
+                    &cadcraft_render::Options { tolerance: tol, text: true, fill: false, ..Default::default() },
                 );
-                v = list.prims.iter().map(|p| list.points(p).to_vec()).collect();
-                v.push(vec![c[0], c[1], c[2], c[3], c[0]]);
+                // VNCCad: only what is drawn (lines, arrows, text strokes). The bounding box
+                // (enlarged for dimensions) made a crossing window beside an object pick up the
+                // dimensions next to it.
+                v = list.prims.iter().map(|p| list.points(p).to_vec()).filter(|p| !p.is_empty()).collect();
+                if v.is_empty() {
+                    v.push(vec![c[0], c[1], c[2], c[3], c[0]]);
+                }
             }
             v
         }
@@ -80,6 +85,27 @@ pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     ) || matches!(&e.kind, EntityKind::Hatch(h) if h.solid);
     if filled && entity_bounds(d, e, 0).contains(p) {
         best = 0.0;
+    }
+    // VNCCad: a click anywhere inside a pattern hatch picks it (lines nearby still win).
+    if let EntityKind::Hatch(h) = &e.kind
+        && !h.solid
+        && best > tol * 2.0
+        && entity_bounds(d, e, 0).contains(p)
+    {
+        let mut inside = false;
+        for l in &h.loops {
+            let pts = cadcraft_geom::Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(tol.max(1e-9));
+            let n = pts.len();
+            for i in 0..n {
+                let (a, b) = (pts[i], pts[(i + 1) % n]);
+                if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y) {
+                    inside = !inside;
+                }
+            }
+        }
+        if inside {
+            best = tol * 2.0;
+        }
     }
     best
 }

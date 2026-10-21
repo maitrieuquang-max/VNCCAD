@@ -124,7 +124,21 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
     }
     // VNCCad: AutoLISP routines and scripts.
     let lower_name = name.to_ascii_lowercase();
-    if lower_name.ends_with(".lsp") {
+    // VNCCad: compiled LISP (.fas / .vlx). AutoCAD's compiled format is encrypted Visual LISP
+    // bytecode; a file that is really LISP source under that name loads like a .lsp.
+    if lower_name.ends_with(".fas") || lower_name.ends_with(".vlx") {
+        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).to_string();
+        if head.contains("FAS4-FILE") || head.contains("FAS-FILE") || head.starts_with("VRTLIB") {
+            return Err(bad(
+                "open",
+                format!(
+                    "{}: đây là LISP đã biên dịch và mã hóa của AutoCAD (Visual LISP). VNCCad chưa chạy được dạng này — hãy nạp tệp nguồn .lsp tương ứng (thường đi kèm, hoặc xin tác giả).",
+                    file_name(name)
+                ),
+            ));
+        }
+    }
+    if lower_name.ends_with(".lsp") || lower_name.ends_with(".fas") || lower_name.ends_with(".vlx") {
         let fname = file_name(name);
         let text = crate::lisp::machine::decode_source(bytes);
         let forms = crate::lisp::read_all(&text).map_err(|m| bad("open", format!("{fname}: {m}")))?;

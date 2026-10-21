@@ -270,15 +270,91 @@ pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> usize {
             }
         }
     }
-    if changes.is_empty() {
+    let hatches = hatch_changes(after, before);
+    if changes.is_empty() && hatches.is_empty() {
         return 0;
     }
     let d = Arc::make_mut(after);
-    let n = changes.len();
+    let n = changes.len() + hatches.len();
     for (h, nd) in changes {
         let _ = d.modify_entity(h, |e| e.kind = EntityKind::Dimension(nd));
     }
+    for (h, nh) in hatches {
+        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Hatch(nh));
+    }
     n
+}
+
+/// VNCCad: associative hatches follow their boundary objects. A hatch whose boundary object
+/// was erased stops being associative.
+fn hatch_changes(after: &Drawing, before: &Drawing) -> Vec<(Handle, cadcraft_doc::Hatch)> {
+    use cadcraft_doc::HatchLoop;
+    let mut out = Vec::new();
+    let spaces = std::iter::once((Space::Model, &after.model)).chain(after.layouts.iter().map(|l| (Space::Paper(l.name.clone()), &l.entities)));
+    for (space, store) in spaces {
+        for e in store.iter() {
+            let EntityKind::Hatch(h) = &e.kind else { continue };
+            if !h.associative || h.boundary.is_empty() || !h.boundary.iter().any(|b| src_changed(before, after, *b)) {
+                continue;
+            }
+            let mut nh = h.clone();
+            if h.boundary.iter().any(|b| after.entity(*b).is_none()) {
+                nh.associative = false;
+                nh.boundary.clear();
+                nh.seeds.clear();
+                out.push((e.handle, nh));
+                continue;
+            }
+            if h.seeds.is_empty() {
+                let mut loops: Vec<HatchLoop> = h
+                    .boundary
+                    .iter()
+                    .filter_map(|b| after.entity(*b).and_then(|x| crate::cmd::hatch::closed_loop(after, x)))
+                    .map(|vertices| HatchLoop { vertices, outer: false })
+                    .collect();
+                if loops.is_empty() {
+                    continue;
+                }
+                let area = |l: &HatchLoop| cadcraft_geom::shoelace(&l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).abs();
+                if let Some(big) = (0..loops.len()).max_by(|a, b| area(&loops[*a]).total_cmp(&area(&loops[*b])))
+                    && let Some(l) = loops.get_mut(big)
+                {
+                    l.outer = true;
+                }
+                nh.loops = loops;
+            } else {
+                // Traced boundary: trace again from the internal points, moved along with the
+                // first boundary object when they fell outside.
+                let delta = h
+                    .boundary
+                    .first()
+                    .and_then(|b| Some((before.entity(*b)?.kind.grips().first().copied()?, after.entity(*b)?.kind.grips().first().copied()?)))
+                    .map(|(a, b)| b - a)
+                    .unwrap_or(Vec2::ZERO);
+                let mut loops = Vec::new();
+                let mut seeds = Vec::new();
+                for sd in &h.seeds {
+                    let tried = crate::cmd::hatch::loops_at_doc(after, &space, *sd).map(|l| (l, *sd)).or_else(|_| {
+                        let q = *sd + delta;
+                        crate::cmd::hatch::loops_at_doc(after, &space, q).map(|l| (l, q))
+                    });
+                    if let Ok((l, q)) = tried {
+                        loops.extend(l);
+                        seeds.push(q);
+                    }
+                }
+                if loops.is_empty() {
+                    continue;
+                }
+                nh.loops = loops;
+                nh.seeds = seeds;
+            }
+            if nh != *h {
+                out.push((e.handle, nh));
+            }
+        }
+    }
+    out
 }
 
 /// The post-command pass: called by `Session::execute` and when an interactive command

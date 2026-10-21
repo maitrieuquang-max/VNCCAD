@@ -14,6 +14,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("grip.move", "Grip Stretch", run_grip_move)
             .params("{handle, index, to} (stretch the grip) | {handles?, index, baseHandle?, to, mode: \"move\", copy?} (move about the grip)"),
         CommandSpec::new("grip.stretch", "Grip Stretch", run_grip_stretch).params("{handle, index, to}"),
+        CommandSpec::new("grip.multi", "Grip Stretch", run_grip_multi)
+            .params("{grips: [[handle, index], …], delta: [dx, dy]} (VNCCad: several hot grips stretched together, one undo)"),
         CommandSpec::new("grip.rotate", "Grip Rotate", run_grip_rotate).params("{handles?, base | baseHandle+index, angle (degrees) | to, copy?}"),
         CommandSpec::new("grip.scale", "Grip Scale", run_grip_scale).params("{handles?, base | baseHandle+index, factor | to, copy?}"),
         CommandSpec::new("grip.mirror", "Grip Mirror", run_grip_mirror)
@@ -57,6 +59,44 @@ fn base_point(s: &Session, cmd: &str, p: &Value, hs: &[Handle]) -> Result<Vec2> 
 fn apply(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Value> {
     let r = super::modify::transform_entities(s, hs, m, copy)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+}
+
+/// VNCCad: several hot grips (Shift+click) stretched by the same displacement.
+fn run_grip_multi(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = point_req("grip.multi", p, "delta")?;
+    let list = p.get("grips").and_then(Value::as_array).ok_or_else(|| bad("grip.multi", "`grips` is required"))?;
+    let mut by: Vec<(Handle, Vec<usize>)> = Vec::new();
+    for g in list {
+        let h = g.get(0).and_then(Value::as_str).and_then(Handle::parse_hex);
+        let i = g.get(1).and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+        let (Some(h), Some(i)) = (h, i) else { return Err(bad("grip.multi", "each grip is [handle, index]")) };
+        match by.iter_mut().find(|(x, _)| *x == h) {
+            Some((_, v)) => {
+                if !v.contains(&i) {
+                    v.push(i);
+                }
+            }
+            None => by.push((h, vec![i])),
+        }
+    }
+    let mut out = Vec::new();
+    for (h, idx) in by {
+        if curves::is_locked(s, h) {
+            continue;
+        }
+        let e = curves::entity(s, h)?;
+        let orig = e.kind.grips();
+        let mut k = e.kind.clone();
+        for i in idx {
+            let Some(at) = orig.get(i) else { continue };
+            if let Some(nk) = stretch_grip(&k, i, *at + d) {
+                k = nk;
+            }
+        }
+        s.doc_mut()?.modify_entity(h, |e| e.kind = k)?;
+        out.push(h.hex());
+    }
+    Ok(json!({ "handles": out }))
 }
 
 fn run_grip_stretch(s: &mut Session, p: &Value) -> Result<Value> {

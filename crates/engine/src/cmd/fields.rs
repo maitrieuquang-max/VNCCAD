@@ -183,6 +183,7 @@ fn make_field(s: &mut Session, f: FieldLink, at: Vec2, height: Option<f64>) -> R
         style,
         contents: v,
         line_spacing: 1.0,
+        mask: None,
     });
     let th = s.add_entity(k)?;
     s.doc_mut()?.fields.push(FieldLink { text: th, ..f });

@@ -216,6 +216,23 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 style: t.s(7).unwrap_or_else(|| "Standard".into()),
                 contents,
                 line_spacing: t.fd(44, 1.0),
+                mask: match t.i(90).unwrap_or(0) {
+                    f if f & 1 != 0 => Some(cadcraft_doc::TextMask {
+                        scale: t.fd(45, 1.5),
+                        color: if f & 2 != 0 {
+                            None
+                        } else if let Some(v) = t.i(421) {
+                            Some(cadcraft_doc::color::Color::True(cadcraft_doc::color::Rgb(
+                                ((v >> 16) & 0xFF) as u8,
+                                ((v >> 8) & 0xFF) as u8,
+                                (v & 0xFF) as u8,
+                            )))
+                        } else {
+                            Some(cadcraft_doc::color::Color::Index(u8::try_from(t.i(63).unwrap_or(7)).unwrap_or(7).max(1)))
+                        },
+                    }),
+                    _ => None,
+                },
             })
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {
@@ -655,6 +672,39 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         gradient: None,
         origin: Vec2::ZERO,
         background: None,
+        boundary: if t.i(71).unwrap_or(0) != 0 {
+            // Boundary objects: the 330 handles after each loop's 97 count.
+            let mut out = Vec::new();
+            let mut j = start;
+            while j < tags.len() {
+                if tags[j].code == 97 {
+                    let n = tags[j].i64().clamp(0, 100_000) as usize;
+                    for k in 0..n {
+                        if let Some(h) = tags.get(j + 1 + k).filter(|x| x.code == 330).and_then(|x| cadcraft_doc::Handle::parse_hex(&x.str())) {
+                            out.push(h);
+                        }
+                    }
+                    j += n;
+                }
+                j += 1;
+            }
+            out
+        } else {
+            Vec::new()
+        },
+        seeds: match tags.iter().rposition(|x| x.code == 98) {
+            Some(k) => {
+                let n = tags[k].i64().clamp(0, 10_000) as usize;
+                (0..n)
+                    .filter_map(|q| {
+                        let x = tags.get(k + 1 + q * 2).filter(|t| t.code == 10)?.f64();
+                        let y = tags.get(k + 2 + q * 2).filter(|t| t.code == 20)?.f64();
+                        Some(Vec2::new(x, y))
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        },
     }))
 }
 

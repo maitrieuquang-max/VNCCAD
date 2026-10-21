@@ -1362,6 +1362,8 @@ enum XMode {
     Two,
     Fixed(f64),
     AngAsk,
+    /// VNCCad: the angle shown with two points (the first one picked).
+    AngPick(Vec2),
     RefSelect,
     RefAngle(f64),
     Bisect,
@@ -1390,7 +1392,8 @@ impl Interactive for XlineM2 {
                 Some(b) => Prompt::new("Specify through point", Accept::POINT).base(b),
             },
             XMode::Fixed(_) => Prompt::new("Specify through point", Accept::POINT),
-            XMode::AngAsk => Prompt::new("Enter angle of xline (0) or", Accept::NUMBER).kw(&["Reference"]),
+            XMode::AngAsk => Prompt::new("Enter angle of xline (0) or pick two points, or", Accept::POINT_OR_NUMBER).kw(&["Reference"]),
+            XMode::AngPick(p) => Prompt::new("Specify second point (angle)", Accept::POINT).base(p),
             XMode::RefSelect => Prompt::new("Select a line object", Accept::POINT),
             XMode::RefAngle(_) => Prompt::new("Enter angle of xline", Accept::NUMBER).default("0"),
             XMode::Bisect => match self.bis.len() {
@@ -1446,6 +1449,17 @@ impl Interactive for XlineM2 {
             }
             (XMode::AngAsk, Input::Keyword(_)) => {
                 self.mode = XMode::RefSelect;
+                Ok(Step::Continue)
+            }
+            (XMode::AngAsk, Input::Point(p)) => {
+                self.mode = XMode::AngPick(p);
+                Ok(Step::Continue)
+            }
+            (XMode::AngPick(a), Input::Point(p)) => {
+                if a.near(p, 1e-12) {
+                    return Err(other("The points must differ."));
+                }
+                self.mode = XMode::Fixed(a.angle_to(p));
                 Ok(Step::Continue)
             }
             (XMode::AngAsk, Input::Text(t)) => {
@@ -1513,6 +1527,7 @@ impl Interactive for XlineM2 {
         match self.mode {
             XMode::Two => self.base.and_then(|b| xl(b, c - b)).into_iter().collect(),
             XMode::Fixed(a) => xl(c, Vec2::from_angle(a)).into_iter().collect(),
+            XMode::AngPick(p) => xl(p, c - p).into_iter().collect(),
             XMode::Bisect => match self.bis.as_slice() {
                 [v, a] => bisect_dir(*v, *a, c).and_then(|d| xl(*v, d)).into_iter().collect(),
                 _ => Vec::new(),

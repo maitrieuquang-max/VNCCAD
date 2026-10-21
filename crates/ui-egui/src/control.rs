@@ -202,8 +202,14 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     _ => egui::PointerButton::Primary,
                 };
                 let modifiers = egui::Modifiers { shift: p.get("shift").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
-                app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
-                app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
+                // `phase`: "down" or "up" alone (press-drag-release tests); default both.
+                let phase = s("phase").unwrap_or("both");
+                if phase != "up" {
+                    app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
+                }
+                if phase != "down" {
+                    app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
+                }
             }
             ok(Value::Null)
         }

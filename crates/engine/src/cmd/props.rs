@@ -12,7 +12,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
         CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
-        CommandSpec::new("matchprop", "Match Properties", run_matchprop).menu(&["Modify", "Match Properties"]).alias(&["ma", "painter"]).params("{source, targets: [hex]}"),
+        CommandSpec::new("matchprop", "Match Properties", run_matchprop)
+            .menu(&["Modify", "Match Properties"])
+            .alias(&["ma", "painter"])
+            .params("{source, targets: [hex]}")
+            .interactive(|_| Ok(Box::new(super::flow::Flow::new("matchprop", plan_matchprop, flow_matchprop)))),
         CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}"),
         CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\"}"),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
@@ -294,9 +298,34 @@ fn run_matchprop(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|v| v.as_str().and_then(cadcraft_doc::Handle::parse_hex)).collect())
         .unwrap_or_default();
+    match_props(s, src, &tg)
+}
+
+fn plan_matchprop(_s: &Session, a: &[super::flow::Ans]) -> Option<super::flow::Ask> {
+    use super::flow::Ask;
+    match a.len() {
+        0 => Some(Ask::One("Select source object".into())),
+        1 => Some(Ask::Select("Select destination object(s)".into())),
+        _ => None,
+    }
+}
+
+fn flow_matchprop(s: &mut Session, a: &[super::flow::Ans]) -> Result<Value> {
+    let src = a.first().and_then(|x| x.sel().first().copied()).ok_or_else(|| bad("matchprop", "no source object"))?;
+    let tg: Vec<cadcraft_doc::Handle> = a.get(1).map(|x| x.sel().iter().copied().filter(|h| *h != src).collect()).unwrap_or_default();
+    let r = match_props(s, src, &tg)?;
+    s.set_selection(Vec::new());
+    Ok(r)
+}
+
+/// VNCCad: the general properties, plus the ones objects of the same kind share (text style
+/// and height, dimension style, hatch pattern, polyline width, thickness).
+fn match_props(s: &mut Session, src: cadcraft_doc::Handle, tg: &[cadcraft_doc::Handle]) -> Result<Value> {
+    use cadcraft_doc::EntityKind as K;
     let d = s.doc_mut()?;
-    let c = d.entity(src).map(|e| e.common.clone()).ok_or_else(|| bad("matchprop", "no such source"))?;
-    for h in &tg {
+    let se = d.entity(src).map(|e| (**e).clone()).ok_or_else(|| bad("matchprop", "no such source"))?;
+    let c = se.common.clone();
+    for h in tg {
         d.modify_entity(*h, |e| {
             e.common.layer = c.layer.clone();
             e.common.color = c.color;
@@ -304,9 +333,53 @@ fn run_matchprop(s: &mut Session, p: &Value) -> Result<Value> {
             e.common.lineweight = c.lineweight;
             e.common.ltscale = c.ltscale;
             e.common.transparency = c.transparency;
+            e.common.thickness = c.thickness;
+            match (&se.kind, &mut e.kind) {
+                (K::Text(a), K::Text(b)) => {
+                    b.style = a.style.clone();
+                    b.height = a.height;
+                    b.width_factor = a.width_factor;
+                    b.oblique = a.oblique;
+                }
+                (K::MText(a), K::MText(b)) => {
+                    b.style = a.style.clone();
+                    b.height = a.height;
+                    b.mask = a.mask.clone();
+                }
+                (K::Text(a), K::MText(b)) => {
+                    b.style = a.style.clone();
+                    b.height = a.height;
+                }
+                (K::MText(a), K::Text(b)) => {
+                    b.style = a.style.clone();
+                    b.height = a.height;
+                }
+                (K::Dimension(a), K::Dimension(b)) => {
+                    b.style = a.style.clone();
+                    b.overrides = a.overrides.clone();
+                    b.block = None;
+                }
+                (K::MLeader(a), K::MLeader(b)) => {
+                    b.style = a.style.clone();
+                    b.arrow_size = a.arrow_size;
+                }
+                (K::Hatch(a), K::Hatch(b)) => {
+                    b.pattern = a.pattern.clone();
+                    b.solid = a.solid;
+                    b.scale = a.scale;
+                    b.angle = a.angle;
+                    b.gradient = a.gradient.clone();
+                }
+                (K::LwPolyline(a), K::LwPolyline(b)) => b.const_width = a.const_width,
+                (K::Table(a), K::Table(b)) => {
+                    b.style = a.style.clone();
+                    b.text_height = a.text_height;
+                }
+                _ => {}
+            }
         })?;
     }
-    Ok(json!({ "changed": tg.len() }))
+    Ok(json!({ "changed": tg.len(), "message": format!("Đã sao thuộc tính cho {} đối tượng.", tg.len()) }))
 }
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
@@ -379,10 +452,22 @@ fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.set_i64(&k.to_ascii_uppercase(), v.clamp(lo, hi));
         }
     }
+    if let Some(v) = p.get("angdir").and_then(Value::as_i64) {
+        d.header.set_i64("ANGDIR", v.clamp(0, 1));
+    }
+    if let Some(v) = p.get("angbase").and_then(Value::as_f64).filter(|v| v.is_finite()) {
+        d.header.set_f64("ANGBASE", v.to_radians());
+    }
     let h = &d.header;
-    Ok(
-        json!({ "lunits": h.i64("LUNITS", 2), "luprec": h.i64("LUPREC", 4), "aunits": h.i64("AUNITS", 0), "auprec": h.i64("AUPREC", 0), "insunits": h.i64("INSUNITS", 1) }),
-    )
+    Ok(json!({
+        "lunits": h.i64("LUNITS", 2),
+        "luprec": h.i64("LUPREC", 4),
+        "aunits": h.i64("AUNITS", 0),
+        "auprec": h.i64("AUPREC", 0),
+        "insunits": h.i64("INSUNITS", 1),
+        "angdir": h.i64("ANGDIR", 0),
+        "angbase": h.f64("ANGBASE", 0.0).to_degrees(),
+    }))
 }
 
 fn run_limits(s: &mut Session, p: &Value) -> Result<Value> {
@@ -574,7 +659,9 @@ fn run_dimstyle(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimstyle", "bad style name"));
     }
     let d = s.doc_mut()?;
-    let base = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
+    // VNCCad: a new style starts as a copy of `copyFrom` (default: the current style).
+    let from = str_param(p, "copyFrom").map(str::to_string).unwrap_or_else(|| d.header.str("DIMSTYLE", "Standard"));
+    let base = d.dim_style(&from).or_else(|| d.dim_style(&d.header.str("DIMSTYLE", "Standard"))).cloned().unwrap_or_default();
     let idx = match d.dim_styles.iter().position(|t| t.name.eq_ignore_ascii_case(&name)) {
         Some(i) => i,
         None => {
@@ -585,7 +672,7 @@ fn run_dimstyle(s: &mut Session, p: &Value) -> Result<Value> {
     let mut rejected = Vec::new();
     if let (Some(st), Some(src)) = (d.dim_styles.get_mut(idx), p.as_object()) {
         let fields: serde_json::Map<String, Value> =
-            src.iter().filter(|(k, _)| !matches!(k.as_str(), "name" | "current")).map(|(k, v)| (k.clone(), v.clone())).collect();
+            src.iter().filter(|(k, _)| !matches!(k.as_str(), "name" | "current" | "copyFrom")).map(|(k, v)| (k.clone(), v.clone())).collect();
         rejected = st.apply_fields(&fields);
     }
     if bool_or(p, "current", true) {

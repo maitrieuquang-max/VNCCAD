@@ -507,6 +507,17 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         value_box(ui, &header, true, !sel.is_empty());
     });
+    // VNCCad: the object editor (text, attributes, table cells, viewport scale…).
+    if sel.len() == 1
+        && let Some(h) = sel.first().copied()
+    {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            if ui.small_button("✏ Sửa chi tiết…").on_hover_text("Hoặc kích đúp vào đối tượng").clicked() {
+                ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("vnc_open_edit"), h));
+            }
+        });
+    }
     ui.add_space(4.0);
     let h = &d.header;
     if sel.is_empty() {

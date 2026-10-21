@@ -818,6 +818,7 @@ fn txt2mtxt(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
         style: first.style.clone(),
         contents,
         line_spacing: 1.0,
+        mask: None,
     };
     let d = s.doc_mut()?;
     for h in hs {

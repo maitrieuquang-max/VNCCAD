@@ -109,6 +109,7 @@ pub fn specs() -> Vec<CommandSpec> {
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
     let d = s.doc_mut()?;
     let mut out = Vec::new();
+    let mut map: Vec<(Handle, Handle)> = Vec::new();
     for h in hs {
         let Some(sp) = d.space_of(*h) else { continue };
         if copy {
@@ -119,6 +120,7 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             if let Some(st) = d.space_mut(&sp) {
                 st.push(ne);
                 out.push(nh);
+                map.push((*h, nh));
             }
         } else {
             let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
@@ -127,6 +129,24 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             }
             d.modify_entity(*h, |e| e.kind.transform(m))?;
             out.push(*h);
+        }
+    }
+    // VNCCad: a copied associative hatch follows the copied boundary (or none).
+    for (_, nh) in &map {
+        let is_assoc = d.entity(*nh).is_some_and(|e| matches!(&e.kind, EntityKind::Hatch(x) if !x.boundary.is_empty()));
+        if is_assoc {
+            d.modify_entity(*nh, |e| {
+                if let EntityKind::Hatch(x) = &mut e.kind {
+                    let nb: Vec<Handle> = x.boundary.iter().filter_map(|b| map.iter().find(|(o, _)| o == b).map(|(_, n)| *n)).collect();
+                    if nb.len() == x.boundary.len() {
+                        x.boundary = nb;
+                    } else {
+                        x.boundary.clear();
+                        x.seeds.clear();
+                        x.associative = false;
+                    }
+                }
+            })?;
         }
     }
     Ok(out)
@@ -976,6 +996,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     style: style.text_style.clone(),
                     contents: g.value.clone(),
                     line_spacing: 1.0,
+                    mask: None,
                 }),
             });
             Some(v)
@@ -1138,8 +1159,9 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             v
         }
-        EntityKind::LwPolyline(p) if !p.closed => {
-            let pl = Polyline { vertices: p.vertices.clone(), closed: false };
+        EntityKind::LwPolyline(p) => {
+            // VNCCad: closed polylines too, and the pieces keep width, elevation and PLINEGEN.
+            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
             let segs = pl.segments();
             let total: f64 = segs.iter().map(Segment::len).sum();
             let lp = |q: Vec2| {
@@ -1156,17 +1178,51 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
                 best.1
             };
             let (mut t1, mut t2) = (lp(p1), lp(p2));
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
+            let piece = |vs: Vec<PolyVertex>| {
+                EntityKind::LwPolyline(cadcraft_doc::LwPolyline {
+                    vertices: vs,
+                    closed: false,
+                    const_width: p.const_width,
+                    elevation: p.elevation,
+                    plinegen: p.plinegen,
+                })
+            };
             let mut v = Vec::new();
-            if t1 > 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, 0.0, t1), false));
+            if p.closed {
+                // The part from the first point to the second (in vertex order) goes.
+                let mut keep = if t1 <= t2 {
+                    let mut a = sub_polyline(&segs, t2, total);
+                    let b = sub_polyline(&segs, 0.0, t1);
+                    if let (Some(l), Some(f)) = (a.last(), b.first())
+                        && l.p.near(f.p, 1e-9)
+                    {
+                        a.pop();
+                    }
+                    a.extend(b);
+                    a
+                } else {
+                    sub_polyline(&segs, t2, t1)
+                };
+                keep.dedup_by(|b, a| a.p.near(b.p, 1e-12) && a.bulge == 0.0);
+                if keep.len() >= 2 {
+                    v.push(piece(keep));
+                }
+                if v.is_empty() {
+                    return Err(EngineError::Other("Nothing would be left of the polyline.".into()));
+                }
+                v
+            } else {
+                if t1 > t2 {
+                    std::mem::swap(&mut t1, &mut t2);
+                }
+                if t1 > 1e-12 {
+                    v.push(piece(sub_polyline(&segs, 0.0, t1)));
+                }
+                if t2 < total - 1e-12 {
+                    v.push(piece(sub_polyline(&segs, t2, total)));
+                }
+                v
             }
-            if t2 < total - 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, t2, total), false));
-            }
-            v
         }
         _ => return Err(EngineError::Other("Cannot break that object.".into())),
     };
@@ -1319,6 +1375,11 @@ struct SelectThen {
     objs: Vec<Handle>,
     pts: Vec<Vec2>,
     reference: bool,
+    /// VNCCad: SCALE / ROTATE Reference: the reference length/angle once given, the points
+    /// picked for it (or for the new value) and whether the new value comes from two points.
+    ref_val: Option<f64>,
+    ref_pts: Vec<Vec2>,
+    ref_new_points: bool,
     copy_mode: bool,
     window: Option<cadcraft_geom::Bounds2>,
     ask_erase: bool,
@@ -1332,10 +1393,97 @@ impl SelectThen {
             objs: Vec::new(),
             pts: Vec::new(),
             reference: false,
+            ref_val: None,
+            ref_pts: Vec::new(),
+            ref_new_points: false,
             copy_mode: false,
             window: None,
             ask_erase: false,
         }
+    }
+    /// SCALE / ROTATE Reference: a length (angle) measured between two points.
+    fn measure(&self, a: Vec2, b: Vec2) -> f64 {
+        if self.op == Op::Scale { a.dist(b) } else { a.angle_to(b) }
+    }
+    fn reference_prompt(&self) -> Prompt {
+        let scale = self.op == Op::Scale;
+        if let Some(p) = self.ref_pts.first() {
+            return Prompt::new("Specify second point", Accept::POINT).base(*p);
+        }
+        match self.ref_val {
+            None if self.ref_new_points => Prompt::new("Specify first point", Accept::POINT),
+            None if scale => Prompt::new("Specify reference length", Accept::POINT_OR_NUMBER).default("1.0000"),
+            None => Prompt::new("Specify the reference angle", Accept::POINT_OR_NUMBER).default("0"),
+            Some(_) if self.ref_new_points => Prompt::new("Specify first point", Accept::POINT),
+            Some(_) if scale => {
+                Prompt::new("Specify new length or", Accept::POINT_OR_NUMBER).kw(&["Points"]).default("1.0000").base_opt(self.pts.first().copied())
+            }
+            Some(_) => {
+                Prompt::new("Specify the new angle or", Accept::POINT_OR_NUMBER).kw(&["Points"]).default("0").base_opt(self.pts.first().copied())
+            }
+        }
+    }
+    fn reference_input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let scale = self.op == Op::Scale;
+        let parse = |t: &str| -> Result<f64> {
+            if scale {
+                number(t).filter(|v| *v > 0.0).ok_or_else(|| EngineError::Other("Requires a positive number or two points.".into()))
+            } else {
+                crate::units::parse_angle(t).ok_or_else(|| EngineError::Other("Requires an angle or two points.".into()))
+            }
+        };
+        // The value given now: the reference, or the new one.
+        let val = match i {
+            Input::Keyword(k) if k == "Points" && self.ref_val.is_some() => {
+                self.ref_new_points = true;
+                return Ok(Step::Continue);
+            }
+            Input::Point(p) => {
+                let two = self.ref_val.is_none() || self.ref_new_points;
+                if two {
+                    if let Some(a) = self.ref_pts.first().copied() {
+                        self.ref_pts.clear();
+                        self.ref_new_points = false;
+                        self.measure(a, p)
+                    } else {
+                        self.ref_pts.push(p);
+                        return Ok(Step::Continue);
+                    }
+                } else {
+                    // The new length (angle) from the base point to the cursor.
+                    self.measure(self.pts[0], p)
+                }
+            }
+            Input::Text(t) => parse(&t)?,
+            Input::Enter => {
+                if scale {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => return Ok(Step::Continue),
+        };
+        let Some(r) = self.ref_val else {
+            if scale && val <= 1e-12 {
+                return Err(EngineError::Other("The reference length must be positive.".into()));
+            }
+            self.ref_val = Some(val);
+            return Ok(Step::Continue);
+        };
+        let base = self.pts[0];
+        let m = if scale {
+            if r <= 1e-12 || val <= 1e-12 {
+                return Err(EngineError::Other("Requires a positive length.".into()));
+            }
+            s.echo(format!("Hệ số tỉ lệ = {:.6}", val / r));
+            Mat3::scale_about(base, val / r)
+        } else {
+            Mat3::rotate_about(base, val - r)
+        };
+        transform_entities(s, &self.objs, &m, self.copy_mode)?;
+        s.set_selection(Vec::new());
+        Ok(Step::Done)
     }
     fn apply(&mut self, s: &mut Session) -> Result<Step> {
         // Immediate operations once selection is done.
@@ -1419,6 +1567,9 @@ impl Interactive for SelectThen {
         if self.ask_erase {
             return Prompt::new("Erase source objects?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
         }
+        if self.reference && matches!(self.op, Op::Scale | Op::Rotate) && !self.pts.is_empty() {
+            return self.reference_prompt();
+        }
         let n = self.pts.len();
         let base = self.pts.first().copied();
         let pts_from = if self.op == Op::Stretch { 2 } else { 0 };
@@ -1476,6 +1627,9 @@ impl Interactive for SelectThen {
         }
         let off = if self.op == Op::Stretch { 2 } else { 0 };
         let k = self.pts.len() - off;
+        if self.reference && matches!(self.op, Op::Scale | Op::Rotate) && k == 1 {
+            return self.reference_input(s, i);
+        }
         match (self.op, k, i) {
             (_, _, Input::Keyword(kw)) if kw == "Copy" => {
                 self.copy_mode = true;
@@ -1484,7 +1638,6 @@ impl Interactive for SelectThen {
             }
             (_, _, Input::Keyword(kw)) if kw == "Reference" => {
                 self.reference = true;
-                s.echo("Reference: not available yet; enter a value.");
                 Ok(Step::Continue)
             }
             (Op::Copy, _, Input::Keyword(kw)) if kw == "Exit" => {
@@ -1906,6 +2059,8 @@ impl Interactive for FilletM {
 #[derive(Default)]
 struct BreakM {
     obj: Option<(Handle, Vec2)>,
+    /// VNCCad: "First point": the pick only selects; the first break point is asked next.
+    first_kw: bool,
 }
 
 impl Interactive for BreakM {
@@ -1915,7 +2070,8 @@ impl Interactive for BreakM {
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.obj {
             None => Prompt::new("Select object", Accept::POINT),
-            Some(_) => Prompt::new("Specify second break point", Accept::POINT).kw(&["First point"]),
+            Some(_) if self.first_kw => Prompt::new("Specify first break point", Accept::POINT),
+            Some((_, p)) => Prompt::new("Specify second break point or", Accept::POINT).kw(&["First point"]).base(p),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -1930,6 +2086,15 @@ impl Interactive for BreakM {
                     }
                     None => s.echo("*Invalid selection*"),
                 }
+                Ok(Step::Continue)
+            }
+            (Some(_), Input::Keyword(k)) if k == "First point" => {
+                self.first_kw = true;
+                Ok(Step::Continue)
+            }
+            (Some((h, _)), Input::Point(p)) if self.first_kw => {
+                self.first_kw = false;
+                self.obj = Some((h, p));
                 Ok(Step::Continue)
             }
             (Some((h, p1)), Input::Point(p2)) => {

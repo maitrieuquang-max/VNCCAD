@@ -52,6 +52,7 @@ fn sample() -> Drawing {
             style: "Standard".into(),
             contents: "line one\\Pline two".into(),
             line_spacing: 1.0,
+            mask: None,
         }),
     )
     .unwrap();
@@ -113,6 +114,8 @@ fn sample() -> Drawing {
             gradient: None,
             origin: Vec2::ZERO,
             background: None,
+            boundary: Vec::new(),
+            seeds: Vec::new(),
         }),
     )
     .unwrap();
@@ -853,6 +856,7 @@ fn mleader_is_written_as_leader_and_mtext() {
         contents: "Note".into(),
         style: "Standard".into(),
         line_spacing: 1.0,
+        mask: None,
     };
     let m = cadcraft_doc::MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],

@@ -330,6 +330,7 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         style,
         contents: text.replace('\n', "\\P"),
         line_spacing: f64_or(p, "lineSpacing", 1.0),
+        mask: None,
     });
     added(s.add_entity(k)?)
 }
@@ -1223,6 +1224,7 @@ impl Interactive for MTextM {
                     style,
                     contents: t,
                     line_spacing: 1.0,
+                    mask: None,
                 }))?;
                 return Ok(Step::Done);
             }

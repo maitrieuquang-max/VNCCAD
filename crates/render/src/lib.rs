@@ -760,6 +760,44 @@ fn mtext_color(c: Option<cadcraft_fonts::MTextColor>, rgb: Rgb) -> Rgb {
 
 fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::MText, rgb: Rgb, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
+    // VNCCad: background mask — hide what lies under the text box (and fill it with a colour).
+    if let Some(m) = &t.mask {
+        let o = t.insert.xy();
+        let (sn, cs) = (-t.rotation).sin_cos();
+        let local = |p: Vec2| {
+            let d = p - o;
+            Vec2::new(d.x * cs - d.y * sn, d.x * sn + d.y * cs)
+        };
+        let mut bx = Bounds2::EMPTY;
+        for p in &l.pieces {
+            for s in &p.shaped.strokes {
+                for q in s {
+                    bx.add(local(*q));
+                }
+            }
+            for g in &p.shaped.glyphs {
+                for c in g {
+                    for q in c {
+                        bx.add(local(*q));
+                    }
+                }
+            }
+        }
+        if !bx.is_empty() {
+            let off = (m.scale.max(1.0) - 1.0) * t.height;
+            let (lo, hi) = (bx.min - Vec2::new(off, off), bx.max + Vec2::new(off, off));
+            let (sn, cs) = t.rotation.sin_cos();
+            let world = |p: Vec2| o + Vec2::new(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+            let q = [world(lo), world(Vec2::new(hi.x, lo.y)), world(hi), world(Vec2::new(lo.x, hi.y))];
+            let poly: Vec<Vec2> = q.iter().map(|p| ctx.xf.apply(*p)).collect();
+            let bounds = Bounds2::from_points(poly.iter().copied());
+            b.masks.push(clip::Mask { before: b.list.prims.len(), poly, bounds });
+            if let Some(c) = m.color {
+                let c = c.resolve(Color::Index(7), ctx.block_color);
+                b.tris(ctx, c, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+            }
+        }
+    }
     for p in &l.pieces {
         b.shaped(ctx, mtext_color(p.color, rgb), lw, &p.shaped);
     }

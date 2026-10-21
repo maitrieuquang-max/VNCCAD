@@ -189,6 +189,18 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 
 Đẩy một tag `v…`, hoặc một commit lên `main` có dòng `[release v0.9.2-beta.1]` trong nội dung: CI build xong sẽ tạo một **Release** trên GitHub gồm gói Windows, Linux, web và bộ test (`packaging/testkit`: hướng dẫn HTML, phiếu test Excel, bản vẽ/lisp/CSV mẫu). Kịch bản test nằm trong `packaging/testkit/scenarios.json`; bản vẽ mẫu tạo lại bằng `cargo test -p cadcraft-engine --lib make_testkit_drawing -- --ignored`.
 
+## Thay đổi ở v0.9.2-beta.2 (sau đợt test đầu)
+
+- Click, quét chọn: tác dụng ngay khi nhấn chuột (một lần là được), kéo-thả để quét khung; quét cắt (crossing) không còn kéo theo kích thước bên cạnh.
+- LINE/PLINE: đoạn mới hiện ngay; pan trong khung MV hiện ngay.
+- TK (bám điểm tạm) và FROM tại mọi lời nhắc chọn điểm (MOVE, COPY…); MATCHPROP chọn nguồn/đích; SCALE/ROTATE Reference; BREAK polyline (cả kín); XLINE Ang theo 2 điểm; STRETCH nhiều grip (Shift+click).
+- Hatch: click trong vùng để chọn; hatch liên kết đi theo đường bao (lưu trong DXF); HATCH → Retain boundary; HATCHGENERATEBOUNDARY (HGB).
+- Kích đúp sửa: TEXT, MTEXT (Nền che — background mask), MLEADER, thuộc tính block (cả định dạng chữ), bảng (gõ từng ô; TABLE tự mở), kích thước, hatch, khung nhìn (tỉ lệ, khóa).
+- Hộp thoại: UNITS, STYLE, DIMSTYLE (tạo mới từ kiểu có sẵn), PLOT (thông số trước khi in), PAGESETUP (Page Setup Manager), XREF, ALIASEDIT + REINIT.
+- Ctrl+C/X/V trên desktop; Ctrl+Shift+V dán thành block.
+- HIDEOBJECTS, ISOLATEOBJECTS, UNISOLATEOBJECTS.
+- Tệp .FAS/.VLX: nhận diện và báo rõ (LISP đã biên dịch mã hóa, cần tệp .lsp nguồn).
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:
