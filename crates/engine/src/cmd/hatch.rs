@@ -407,6 +407,19 @@ impl HatchM {
     }
 }
 
+impl HatchM {
+    fn commit(&mut self, s: &mut Session) -> Result<()> {
+        if !self.loops.is_empty() {
+            let loops = std::mem::take(&mut self.loops);
+            let seeds = if self.objs.is_empty() { std::mem::take(&mut self.seeds) } else { Vec::new() };
+            let objs = std::mem::take(&mut self.objs);
+            let st = self.settings.clone();
+            add_hatch(s, &st, loops, seeds, objs)?;
+        }
+        Ok(())
+    }
+}
+
 impl Interactive for HatchM {
     fn name(&self) -> &'static str {
         if self.gradient { "GRADIENT" } else { "HATCH" }
@@ -519,17 +532,19 @@ impl Interactive for HatchM {
                 Ok(Step::Continue)
             }
             Input::Enter => {
-                if !self.loops.is_empty() {
-                    let loops = std::mem::take(&mut self.loops);
-                    let seeds = if self.objs.is_empty() { std::mem::take(&mut self.seeds) } else { Vec::new() };
-                    let objs = std::mem::take(&mut self.objs);
-                    let st = self.settings.clone();
-                    add_hatch(s, &st, loops, seeds, objs)?;
-                }
+                self.commit(s)?;
                 Ok(Step::Done)
             }
             _ => Ok(Step::Continue),
         }
+    }
+    fn keep_on_cancel(&mut self, s: &mut Session) -> Result<bool> {
+        // Areas already picked (shown as preview) are kept, as in AutoCAD.
+        if self.loops.is_empty() {
+            return Ok(false);
+        }
+        self.commit(s)?;
+        Ok(true)
     }
     fn preview(&self, _s: &Session, _c: Vec2) -> Vec<EntityKind> {
         if self.loops.is_empty() {

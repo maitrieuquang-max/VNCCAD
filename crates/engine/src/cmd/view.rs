@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         })
         .menu(&["View", "Redraw"])
-        .alias(&["r"])
+        .alias(&["r", "ra", "redrawall"])
         .noundo()
         .transparent(),
         CommandSpec::new("view.set", "Set View", run_view_set).params("{center: [x,y], height}").noundo(),

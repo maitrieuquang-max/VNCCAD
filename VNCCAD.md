@@ -201,6 +201,17 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - HIDEOBJECTS, ISOLATEOBJECTS, UNISOLATEOBJECTS.
 - Tệp .FAS/.VLX: nhận diện và báo rõ (LISP đã biên dịch mã hóa, cần tệp .lsp nguồn).
 
+## Đợt sửa 1 sau lần test thứ hai (tương tác cơ bản)
+
+- **Bắt điểm, chọn đối tượng nhạy hơn:** vùng nhận click rộng hơn (khoảng 7–8 px quanh con trỏ thay vì 4–5 px) cho chọn đối tượng, kích đúp và mọi lệnh chọn bằng click.
+- **Bắt điểm đường tròn/cung:** rê chuột lên **đường tròn** (không cần vào tâm) là hiện dấu Center như AutoCAD; bộ bắt điểm mặc định nay gồm Endpoint, Midpoint, Center, Node, Quadrant, Intersection, Insertion, Perpendicular, Extension (đổi trong DSETTINGS/OSNAP; Nearest bật thêm nếu cần).
+- **Pickbox khi chọn đối tượng:** TRIM, EXTEND, OFFSET, FILLET, CHAMFER, BREAK, JOIN… (lời nhắc "Select …") hiện ô vuông chọn, tô sáng đối tượng dưới con trỏ và tạm tắt bắt điểm để click trúng đúng đối tượng.
+- **HATCH:** SPACE/Enter kết thúc và giữ hatch; ESC sau khi đã chọn vùng cũng **giữ** hatch (như AutoCAD); ESC khi chưa chọn vùng nào thì hủy.
+- **Lệnh tắt:** thêm `AR` (ARRAY: hỏi Rectangular/PAth/POlar), `LE` (MLEADER), `MO` (PROPERTIES), `RA`; gõ chưa đủ tên lệnh rồi Enter/Space thì chạy lệnh đang được gợi ý (vd. `RECT` → RECTANG); gõ nhầm khi bộ gõ tiếng Việt Telex đang bật (`Ẽ` thay cho `EX`) vẫn nhận đúng lệnh.
+- **Gợi ý lệnh (AutoComplete):** ưu tiên đúng phím tắt, tìm theo cả chữ đầu của phím tắt; ô "Lệnh" trong ALIASEDIT có danh sách gợi ý khi gõ vài chữ đầu.
+- **Phím SPACE:** nhận cả khi bàn phím/trình duyệt chỉ gửi phím mà không gửi ký tự (bộ gõ IME, bản web); nút trên thanh công cụ không còn "bấm lại" khi nhấn Space/Enter trong lúc đang chạy lệnh (trước đây có thể làm lệnh khởi động lại và mất nét đang vẽ).
+- **Vẽ xong mà không thấy nét:** dòng lệnh báo rõ lý do — layer hiện hành đang tắt/đóng băng, đối tượng đang bị ẩn (ISOLATE), hoặc nét nằm ngoài vùng nhìn (gõ `Z` `E`).
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

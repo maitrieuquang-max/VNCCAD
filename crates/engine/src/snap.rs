@@ -97,6 +97,9 @@ pub(crate) fn osnap_with(
     }
     let probe = Bounds2::new(cursor, cursor).expand(aperture);
     let mut cands: Vec<(u32, Vec2)> = Vec::new();
+    // VNCCad: Center snaps found by hovering the curve itself (as AutoCAD does), ranked by the
+    // distance from the cursor to the curve rather than to the far-away centre.
+    let mut cen_on_curve: Vec<(f64, Vec2)> = Vec::new();
     let mut near_prims: Vec<Prim> = Vec::new();
     let mut count = 0usize;
     for (e, known) in crate::select::candidates(d, space, ix, &probe.expand(aperture), true, false)? {
@@ -137,6 +140,11 @@ pub(crate) fn osnap_with(
                     if let Segment::Arc { arc, .. } = s {
                         if osmode & mode::CEN != 0 {
                             cands.push((mode::CEN, arc.center));
+                            let on = (cursor.dist(arc.center) - arc.radius).abs();
+                            let full = (arc.start - arc.end).abs() < 1e-15;
+                            if on <= aperture && (full || arc.contains_angle(arc.center.angle_to(cursor))) {
+                                cen_on_curve.push((on, arc.center));
+                            }
                         }
                         if osmode & mode::QUA != 0 {
                             for k in 0..4 {
@@ -151,6 +159,10 @@ pub(crate) fn osnap_with(
                 Prim::Circle(c) => {
                     if osmode & mode::CEN != 0 {
                         cands.push((mode::CEN, c.center));
+                        let on = (cursor.dist(c.center) - c.radius).abs();
+                        if on <= aperture {
+                            cen_on_curve.push((on, c.center));
+                        }
                     }
                     if osmode & mode::QUA != 0 {
                         for k in 0..4 {
@@ -252,6 +264,9 @@ pub(crate) fn osnap_with(
     });
     if let Some((m, p)) = best {
         return Some(SnapHit { point: *p, mode: *m, name: name_of(*m) });
+    }
+    if let Some((_, c)) = cen_on_curve.iter().min_by(|a, b| a.0.total_cmp(&b.0)) {
+        return Some(SnapHit { point: *c, mode: mode::CEN, name: name_of(mode::CEN) });
     }
     if osmode & mode::NEA != 0 {
         let mut nb: Option<(f64, Vec2)> = None;

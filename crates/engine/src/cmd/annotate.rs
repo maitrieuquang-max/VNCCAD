@@ -66,7 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(LinearM::new(false)))),
         CommandSpec::new("mleader", "Multileader", run_mleader)
             .menu(&["Dimension", "Multileader"])
-            .alias(&["mld"])
+            .alias(&["mld", "le", "qleader"])
             .params("{points: [[arrow], ..., [landing]], text}")
             .interactive(|_| Ok(Box::new(MLeaderM::default()))),
         CommandSpec::new("leader", "Leader", run_leader).alias(&["lead"]).params("{points: [[x,y]...], text?}"),
@@ -792,7 +792,7 @@ impl Interactive for OverrideM {
 // ---------------- interactive ----------------
 
 fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
-    let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+    let ap = s.pixel_size() * s.settings.pick_px();
     crate::select::pick(s.doc().ok()?, &s.space(), p, ap)
 }
 

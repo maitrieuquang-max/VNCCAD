@@ -15,20 +15,36 @@ pub struct CmdLine {
     pub expanded: bool,
 }
 
-/// Matching command names/aliases for AutoComplete.
-fn suggestions(prefix: &str) -> Vec<(String, &'static str)> {
-    if prefix.is_empty() || prefix.contains(' ') {
+/// Matching command names/aliases for AutoComplete: exact aliases first (what Space/Enter
+/// runs), then commands whose name or alias starts with what was typed, shortest first.
+pub fn suggestions(prefix: &str) -> Vec<(String, &'static str)> {
+    if prefix.is_empty() || prefix.contains(' ') || prefix.starts_with('(') || prefix.starts_with('!') {
         return Vec::new();
     }
-    let p = prefix.to_ascii_lowercase();
-    let mut v: Vec<(String, &'static str)> = cadcraft_engine::command_specs()
+    let p = prefix.trim_start_matches(['_', '.', '-', '\'']).to_ascii_lowercase();
+    if p.is_empty() {
+        return Vec::new();
+    }
+    let mut v: Vec<(u8, String, &'static str)> = cadcraft_engine::command_specs()
         .iter()
-        .filter(|c| !c.id.contains('.') && (c.id.starts_with(&p) || c.aliases.iter().any(|a| *a == p)))
-        .map(|c| (c.id.to_ascii_uppercase(), c.label))
+        .filter(|c| !c.id.contains('.'))
+        .filter_map(|c| {
+            let rank = if c.id == p || c.aliases.iter().any(|a| *a == p) {
+                0
+            } else if c.id.starts_with(&p) {
+                1
+            } else if c.aliases.iter().any(|a| a.starts_with(&p)) {
+                2
+            } else {
+                return None;
+            };
+            Some((rank, c.id.to_ascii_uppercase(), c.label))
+        })
         .collect();
-    v.sort_by_key(|(id, _)| (id.len(), id.clone()));
+    v.sort_by(|a, b| (a.0, a.1.len(), &a.1).cmp(&(b.0, b.1.len(), &b.1)));
+    v.dedup_by(|a, b| a.1 == b.1);
     v.truncate(8);
-    v
+    v.into_iter().map(|(_, id, l)| (id, l)).collect()
 }
 
 /// Handle keyboard input destined for the command line (when no text field has focus).
@@ -77,8 +93,18 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
         return;
     }
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
+    // VNCCad: some keyboards and browsers (IME active, the web text agent) deliver Space only as a
+    // key press, without the matching text event; it must still act as Enter.
+    let space_as_text = events.iter().any(|e| matches!(e, egui::Event::Text(t) if t.contains(' ')));
     for ev in events {
         match ev {
+            egui::Event::Key { key: Key::Space, pressed: true, modifiers, .. } if !space_as_text && !modifiers.any() => {
+                if !text_prompt && !lisp_open(&app.cmd.buffer) {
+                    submit(app);
+                } else {
+                    app.cmd.buffer.push(' ');
+                }
+            }
             egui::Event::Text(t) => {
                 if t == " " && !text_prompt && !lisp_open(&app.cmd.buffer) {
                     submit(app);
@@ -172,7 +198,36 @@ pub fn submit(app: &mut CadApp) {
         }
         return;
     }
+    let text = complete_first_word(app, text);
     app.cmdline(&text);
+}
+
+/// VNCCad: like AutoCAD's AutoComplete, an unknown command name typed at `Command:` runs the
+/// highlighted suggestion (`RECT` → RECTANG). Known names, aliases and LISP commands are left alone.
+fn complete_first_word(app: &CadApp, text: String) -> String {
+    if app.session.running.is_some() {
+        return text;
+    }
+    let t = text.trim();
+    if t.contains(' ') || t.starts_with('(') || t.starts_with('!') || t.contains('{') {
+        return text;
+    }
+    let name = t.trim_start_matches(['_', '.', '-', '\'']).to_ascii_lowercase();
+    let known = cadcraft_engine::cmd::find_command(&cadcraft_engine::cmd::resolve_alias(&name)).is_some()
+        || app.session.user_aliases.contains_key(&name)
+        || app.session.lisp.has_command(&name)
+        || crate::menus::UI_COMMANDS.iter().any(|c| c.0 == name)
+        || cadcraft_engine::cmd::round3::detelex(&name).is_some();
+    if known {
+        return text;
+    }
+    match suggestions(t).first() {
+        Some((id, _)) => {
+            let prefix: String = t.chars().take_while(|c| matches!(c, '_' | '.' | '-' | '\'')).collect();
+            format!("{prefix}{id}")
+        }
+        None => text,
+    }
 }
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {

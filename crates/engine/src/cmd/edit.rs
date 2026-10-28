@@ -172,7 +172,7 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return Err(bad("select", "window needs 2 corners")) };
         crate::select::select_window(s.doc()?, &space, Bounds2::new(*a, *b), bool_or(p, "crossing", false))
     } else if let Some(at) = point_param(p, "at") {
-        let ap = f64_or(p, "aperture", s.pixel_size() * s.settings.pickbox * 1.5);
+        let ap = f64_or(p, "aperture", s.pixel_size() * s.settings.pick_px());
         crate::select::pick(s.doc()?, &space, at, ap).into_iter().collect()
     } else if let Some(f) = points_param(p, "fence") {
         crate::select::select_fence(s.doc()?, &space, &f)

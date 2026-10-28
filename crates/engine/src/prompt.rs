@@ -69,6 +69,16 @@ impl Prompt {
         self.default = Some(d.into());
         self
     }
+    /// VNCCad: a prompt that wants an object picked by clicking on it (TRIM, EXTEND, OFFSET,
+    /// FILLET, BREAK…): the cursor shows a pickbox, objects highlight under it and running
+    /// object snaps stay off so the click lands on the object the user aimed at.
+    pub fn picks_object(&self) -> bool {
+        if self.accept.select {
+            return true;
+        }
+        let m = self.message.trim_start().to_ascii_lowercase();
+        self.accept.point && m.starts_with("select") && !m.contains("point")
+    }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
         let mut s = self.message.clone();
@@ -139,6 +149,12 @@ pub trait Interactive: Send {
     /// Rubber-band geometry for the cursor position.
     fn preview(&self, _s: &Session, _cursor: Vec2) -> Vec<EntityKind> {
         Vec::new()
+    }
+    /// VNCCad: Escape pressed. Commands whose work is already shown on screen (HATCH with
+    /// picked areas) keep it, as AutoCAD does: return `true` after committing to end the
+    /// command normally instead of discarding everything.
+    fn keep_on_cancel(&mut self, _s: &mut Session) -> Result<bool> {
+        Ok(false)
     }
 }
 

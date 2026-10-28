@@ -1833,7 +1833,7 @@ impl Interactive for OffsetM {
                 Ok(Step::Done)
             }
             (None, Input::Point(p)) => {
-                let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+                let ap = s.pixel_size() * s.settings.pick_px();
                 let space = s.space();
                 match crate::select::pick(s.doc()?, &space, p, ap) {
                     Some(h) => {
@@ -1924,7 +1924,7 @@ impl Interactive for TrimM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match i {
             Input::Point(p) => {
-                let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+                let ap = s.pixel_size() * s.settings.pick_px();
                 let space = s.space();
                 let Some(h) = crate::select::pick(s.doc()?, &space, p, ap) else {
                     s.echo("*Invalid selection*");
@@ -2015,7 +2015,7 @@ impl Interactive for FilletM {
                 Ok(Step::Continue)
             }
             Input::Point(p) => {
-                let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+                let ap = s.pixel_size() * s.settings.pick_px();
                 let space = s.space();
                 let Some(h) = crate::select::pick(s.doc()?, &space, p, ap) else {
                     s.echo("*Invalid selection*");
@@ -2077,7 +2077,7 @@ impl Interactive for BreakM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match (self.obj, i) {
             (None, Input::Point(p)) => {
-                let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+                let ap = s.pixel_size() * s.settings.pick_px();
                 let space = s.space();
                 match crate::select::pick(s.doc()?, &space, p, ap) {
                     Some(h) => {

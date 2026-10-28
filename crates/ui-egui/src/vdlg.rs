@@ -1366,11 +1366,23 @@ fn alias_dialog(app: &mut CadApp, ctx: &egui::Context) {
             ui.label("Phím tắt");
             ui.add(egui::TextEdit::singleline(&mut dl.alias).desired_width(70.0));
             ui.label("Lệnh");
-            ui.add(egui::TextEdit::singleline(&mut dl.command).desired_width(140.0));
+            ui.add(egui::TextEdit::singleline(&mut dl.command).desired_width(140.0).hint_text("gõ vài chữ đầu…"));
             if ui.button("Thêm / Sửa").clicked() {
                 add = true;
             }
         });
+        // VNCCad: AutoComplete for the command name, as on the command line.
+        let typed = dl.command.trim().to_string();
+        let sug = crate::cmdline::suggestions(&typed);
+        if !typed.is_empty() && !sug.iter().any(|(id, _)| id.eq_ignore_ascii_case(&typed)) && !sug.is_empty() {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                for (id, label) in &sug {
+                    if ui.selectable_label(false, format!("{id}   —   {label}")).clicked() {
+                        dl.command = id.clone();
+                    }
+                }
+            });
+        }
         ui.separator();
         ui.collapsing("Phím tắt có sẵn (tham khảo)", |ui| {
             ui.horizontal(|ui| {

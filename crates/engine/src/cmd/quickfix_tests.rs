@@ -144,3 +144,180 @@ fn associative_hatch_follows_boundary() {
     s.execute("hatchgenerateboundary", &json!({"handles": [hat.hex()]})).unwrap();
     assert!(matches!(last(&s), EntityKind::LwPolyline(_)));
 }
+
+/// Đợt 1 (#11): the short names engineers type every day all start a command.
+#[test]
+fn common_aliases_resolve() {
+    let common = [
+        "l",
+        "c",
+        "a",
+        "rec",
+        "pl",
+        "pol",
+        "el",
+        "spl",
+        "xl",
+        "h",
+        "bh",
+        "t",
+        "dt",
+        "mt",
+        "tr",
+        "ex",
+        "o",
+        "f",
+        "cha",
+        "co",
+        "cp",
+        "m",
+        "ro",
+        "sc",
+        "mi",
+        "e",
+        "br",
+        "j",
+        "len",
+        "s",
+        "ar",
+        "x",
+        "di",
+        "aa",
+        "ma",
+        "pu",
+        "st",
+        "d",
+        "le",
+        "mld",
+        "tb",
+        "i",
+        "b",
+        "w",
+        "z",
+        "p",
+        "re",
+        "ed",
+        "pe",
+        "div",
+        "me",
+        "po",
+        "do",
+        "bo",
+        "g",
+        "lt",
+        "lw",
+        "pr",
+        "ch",
+        "mo",
+        "la",
+        "dli",
+        "dal",
+        "dan",
+        "dra",
+        "ddi",
+        "dor",
+        "dco",
+        "dba",
+        "dim",
+        "al",
+        "un",
+        "lts",
+        "os",
+        "ds",
+        "att",
+        "ate",
+        "be",
+        "xa",
+        "im",
+        "revcloud",
+        "dimlinear",
+        "dimaligned",
+        "mleader",
+        "purge",
+        "hatchedit",
+        "he",
+        "li",
+        "id",
+        "u",
+        "qdim",
+        "rea",
+        "ra",
+    ];
+    let missing: Vec<&str> = common.iter().copied().filter(|a| crate::cmd::find_command(&crate::cmd::resolve_alias(a)).is_none()).collect();
+    assert!(missing.is_empty(), "aliases without a command: {missing:?}");
+    let mut s = Session::new();
+    s.cmdline("REC").unwrap();
+    assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("rectang"));
+}
+
+/// Đợt 1 (#13): Escape after picking areas keeps the hatch (AutoCAD behaviour); Space/Enter too.
+#[test]
+fn hatch_kept_on_escape_and_enter() {
+    for finish in ["esc", "enter"] {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({"p1": [0, 0], "p2": [10, 10]})).unwrap();
+        let n = count(&s);
+        s.start("hatch").unwrap();
+        s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+        if finish == "esc" {
+            s.cancel();
+        } else {
+            s.cmdline("").unwrap();
+        }
+        assert!(s.running.is_none(), "{finish}");
+        assert_eq!(count(&s), n + 1, "{finish}: hatch kept");
+        assert!(s.doc().unwrap().model.iter().any(|e| matches!(e.kind, EntityKind::Hatch(_))));
+    }
+    // Escape before any area is picked still cancels without leaving anything.
+    let mut s = Session::new();
+    s.start("hatch").unwrap();
+    s.cancel();
+    assert_eq!(count(&s), 0);
+}
+
+/// Đợt 1 (#12): hovering the rim of a circle offers its centre; prompts that pick an object
+/// (TRIM, OFFSET…) are recognised so the UI shows a pickbox and turns running snaps off.
+#[test]
+fn circle_center_from_rim_and_pick_prompts() {
+    let mut s = Session::new();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 10})).unwrap();
+    let d = s.doc().unwrap().clone();
+    let hit = crate::snap::osnap(&d, &cadcraft_doc::Space::Model, Vec2::new(7.0, 7.2), 0.5, crate::snap::mode::CEN, None).unwrap();
+    assert_eq!(hit.point, Vec2::new(0.0, 0.0));
+    let q = crate::snap::osnap(&d, &cadcraft_doc::Space::Model, Vec2::new(0.1, 9.9), 0.5, 4351, None).unwrap();
+    assert_eq!(q.name, "Quadrant");
+    s.start("trim").unwrap();
+    while s.current_prompt().is_some_and(|p| p.accept.select) {
+        s.input(Input::Enter).unwrap();
+    }
+    assert!(s.current_prompt().unwrap().picks_object());
+    s.cancel();
+    s.start("line").unwrap();
+    assert!(!s.current_prompt().unwrap().picks_object());
+}
+
+/// Đợt 1 (#11): AR → ARRAY asks the type and hands over to ARRAYRECT etc.
+#[test]
+fn array_classic_entry() {
+    let mut s = Session::new();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+    s.cmdline("AR").unwrap();
+    assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("array"));
+    s.cmdline("R").unwrap();
+    assert!(s.running.is_some());
+    assert_ne!(s.current_prompt().unwrap().message, "Enter array type");
+    s.cancel();
+}
+
+/// Đợt 1 (#11): a Telex keyboard left on (Unikey) turns `EX` into `Ẽ`; the command still starts.
+#[test]
+fn telex_typed_command_names() {
+    assert_eq!(crate::cmd::round3::detelex("ẼPLODE").as_deref(), Some("EXPLODE"));
+    assert_eq!(crate::cmd::round3::detelex("Đ").as_deref(), Some("DD"));
+    let mut s = Session::new();
+    s.cmdline("Ẽ").unwrap();
+    assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("extend"));
+    s.cancel();
+    s.cmdline("ẽplode").unwrap();
+    assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("explode"));
+}

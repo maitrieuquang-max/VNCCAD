@@ -266,7 +266,7 @@ fn wants(kind: K, n: usize) -> Vec<Want> {
 }
 
 fn aperture(s: &Session) -> f64 {
-    s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5
+    s.pixel_size() * s.settings.pick_px()
 }
 
 fn build_refs(s: &Session, kind: K, picks: &[(Handle, Hint)]) -> std::result::Result<Vec<GeomRef>, String> {

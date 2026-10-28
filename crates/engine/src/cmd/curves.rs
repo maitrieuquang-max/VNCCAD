@@ -15,7 +15,7 @@ pub const KW: crate::Accept = crate::Accept { point: false, number: false, text:
 // ---------------- picking ----------------
 
 pub fn pick_aperture(s: &Session) -> f64 {
-    s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5
+    s.pixel_size() * s.settings.pick_px()
 }
 
 /// The object under `p` in the current space.

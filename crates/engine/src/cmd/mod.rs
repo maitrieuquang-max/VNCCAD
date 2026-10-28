@@ -33,6 +33,7 @@ mod qselect;
 pub mod quickfix;
 pub mod raster;
 pub mod road;
+pub mod round3;
 mod settings;
 pub mod sheetset;
 mod sketch;
@@ -208,6 +209,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(sketch::specs());
         v.extend(sheetset::specs());
         v.extend(quickfix::specs());
+        v.extend(round3::specs());
         v
     })
 }

@@ -498,7 +498,7 @@ fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
 fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
     let prompt = app.session.current_prompt();
     let hot = app.canvas.hot_grip;
-    let wants_point = hot.is_some() || prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let wants_point = hot.is_some() || prompt.as_ref().is_some_and(|p| p.accept.point && !p.picks_object());
     let base = hot.map(|g| g.base).or_else(|| prompt.as_ref().and_then(|p| p.base));
     let s = app.session.settings.clone();
     app.canvas.snap = None;
@@ -618,7 +618,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && hover_pos.is_some_and(|hp| {
             let Ok(st) = app.session.state() else { return false };
             let w = if st.mspace.is_some() { xf.to_world(hp) } else { xf_paper.to_world(hp) };
-            cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+            cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pick_px() / scale)
                 .and_then(|h| st.doc.entity(h))
                 .is_some_and(|e| !matches!(e.kind, cadcraft_doc::EntityKind::Viewport(_)))
         });
@@ -693,7 +693,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && app.canvas.hot_grip.is_none()
         && let Some(w) = raw_world
         && let Ok(st) = app.session.state()
-        && let Some(h) = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+        && let Some(h) = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pick_px() / scale)
     {
         app.session.pending_window = None;
         app.session.set_selection(vec![h]);
@@ -744,12 +744,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     // Hover highlight (throttled to cursor movement).
     let prompt = app.session.current_prompt();
-    let selecting = prompt.as_ref().is_none_or(|p| p.accept.select);
+    let selecting = prompt.as_ref().is_none_or(|p| p.picks_object());
     if inside && selecting && app.session.pending_window.is_none() {
         if hover_pos != app.canvas.hover_at
             && let (Some(w), Ok(st)) = (raw_world, app.session.state())
         {
-            app.canvas.hover = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale);
+            app.canvas.hover = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pick_px() / scale);
             app.canvas.hover_at = hover_pos;
         }
     } else {

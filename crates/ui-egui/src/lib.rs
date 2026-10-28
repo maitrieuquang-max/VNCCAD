@@ -307,6 +307,15 @@ impl CadApp {
             self.styled = true;
         }
         self.drain_control(ctx);
+        // VNCCad: while a command runs (or a command name is being typed), Space and Enter belong
+        // to the command line. A button left with keyboard focus (Tab) would otherwise be
+        // "clicked" again by Space/Enter, restarting the tool and throwing away the work in hand.
+        if (self.session.running.is_some() || !self.cmd.buffer.is_empty())
+            && !ctx.egui_wants_keyboard_input()
+            && let Some(id) = ctx.memory(|m| m.focused())
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
         // VNCCad: UI steps requested by finished commands (PLOTWINDOW → save the PDF).
         for (id, params) in std::mem::take(&mut self.session.ui_requests) {
             if let Some(Err(e)) = menus::run_ui_command(self, &id, &params) {

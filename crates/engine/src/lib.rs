@@ -269,10 +269,20 @@ pub struct Settings {
     pub qpmode: bool,
 }
 
+impl Settings {
+    /// VNCCad: how far (in screen pixels) a click may land from an object and still pick it.
+    /// PICKBOX alone (3 px) proved too fiddly in the first engineer test rounds.
+    pub fn pick_px(&self) -> f64 {
+        (self.pickbox.clamp(0.0, 50.0) + 2.0).max(5.0) * 1.5
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            osmode: 4133,
+            // VNCCad: Endpoint, Midpoint, Center, Node, Quadrant, Intersection, Insertion,
+            // Perpendicular, Extension — the set Vietnamese drafters usually keep on.
+            osmode: 4351,
             orthomode: false,
             polarmode: true,
             polarang: std::f64::consts::FRAC_PI_2,
@@ -590,7 +600,18 @@ impl Session {
         if let Some(t) = self.user_aliases.get(&lower) {
             lower = t.trim().trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
         }
-        let id = cmd::resolve_alias(&lower);
+        let mut id = cmd::resolve_alias(&lower);
+        // VNCCad: a Vietnamese Telex keyboard left on (`Ẽ` typed for `EX`).
+        if find_command(&id).is_none()
+            && !self.lisp.has_command(&lower)
+            && let Some(plain) = cmd::round3::detelex(&lower)
+        {
+            let plain = self.user_aliases.get(&plain).map(|t| t.trim().trim_start_matches(['_', '.', '-']).to_ascii_lowercase()).unwrap_or(plain);
+            let pid = cmd::resolve_alias(&plain);
+            if find_command(&pid).is_some() {
+                id = pid;
+            }
+        }
         let Some(spec) = find_command(&id) else {
             // VNCCad: a C: command defined in LISP.
             if self.lisp.has_command(&lower) {
@@ -744,7 +765,7 @@ impl Session {
         let space = self.space();
         match input {
             Input::Point(p) => {
-                let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
+                let ap = self.pixel_size() * self.settings.pick_px();
                 if let Some(pw) = self.pending_window.take() {
                     let rot = self.state()?.twist();
                     let crossing = (p - pw.corner).rotate(-rot).x < 0.0;
@@ -785,7 +806,18 @@ impl Session {
     fn feed(&mut self, input: Option<Input>) -> Result<()> {
         let Some(mut run) = self.running.take() else { return Ok(()) };
         let step = match input {
-            Some(Input::Cancel) => Ok(Step::Cancel),
+            Some(Input::Cancel) => {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.machine.keep_on_cancel(self)));
+                match r {
+                    Ok(Ok(true)) => Ok(Step::Done),
+                    Ok(Ok(false)) => Ok(Step::Cancel),
+                    Ok(Err(e)) => {
+                        self.echo(e.to_string());
+                        Ok(Step::Cancel)
+                    }
+                    Err(_) => Ok(Step::Cancel),
+                }
+            }
             Some(i) => {
                 if let Input::Point(p) = &i {
                     self.last_point = *p;
@@ -846,6 +878,9 @@ impl Session {
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
         cmd::fields::refresh(self);
+        if !cancelled {
+            self.warn_unseen(&run.before);
+        }
         if let Ok(st) = self.state_mut()
             && st.uid == run.doc_uid
             && !Arc::ptr_eq(&run.before, &st.doc)
@@ -853,6 +888,48 @@ impl Session {
             st.undo.push(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before });
             st.redo.clear();
             st.revision += 1;
+        }
+    }
+
+    /// VNCCad: objects a command just drew that the user cannot see (layer off or frozen,
+    /// outside the view) used to look like "the command ran but drew nothing". Say why.
+    fn warn_unseen(&mut self, before: &Arc<Drawing>) {
+        let Ok(st) = self.state() else { return };
+        if Arc::ptr_eq(before, &st.doc) {
+            return;
+        }
+        let d = &st.doc;
+        let space = self.space();
+        let Some(store) = d.space(&space) else { return };
+        let skip = store.len().saturating_sub(5000);
+        let fresh: Vec<&Arc<Entity>> = store.iter().skip(skip).filter(|e| before.entity(e.handle).is_none()).collect();
+        if fresh.is_empty() {
+            return;
+        }
+        let msg = if fresh.iter().all(|e| !d.is_visible(e)) {
+            let layer = fresh.first().map(|e| e.common.layer.clone()).unwrap_or_default();
+            if fresh.iter().all(|e| !e.common.visible) {
+                Some("Đối tượng vừa vẽ đang bị ẩn (HIDEOBJECTS/ISOLATEOBJECTS) — gõ UNISOLATEOBJECTS để hiện lại.".to_string())
+            } else {
+                Some(format!("Đối tượng vừa vẽ nằm trên layer \"{layer}\" đang tắt hoặc đóng băng nên không hiển thị — bật lại layer trong LAYER."))
+            }
+        } else {
+            let v = st.view();
+            let (pw, ph) = self.viewport_px;
+            let half_w = v.height * (pw / ph.max(1.0)).max(0.1) / 2.0;
+            let reach = (half_w * half_w + v.height * v.height / 4.0).sqrt();
+            let seen = fresh.iter().filter(|e| d.is_visible(e)).any(|e| {
+                let b = cadcraft_doc::entity_bounds(d, e, 0);
+                if b.is_empty() {
+                    return true;
+                }
+                let c = (b.min + b.max) * 0.5;
+                c.dist(v.center) <= reach + b.min.dist(b.max) / 2.0
+            });
+            (!seen).then(|| "Đối tượng vừa vẽ nằm ngoài vùng đang nhìn — gõ Z rồi E (Zoom Extents) để xem.".to_string())
+        };
+        if let Some(m) = msg {
+            self.echo(m);
         }
     }
 
@@ -1135,7 +1212,7 @@ impl Session {
             self.set_selection(sel);
             return Ok(());
         }
-        let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
+        let ap = self.pixel_size() * self.settings.pick_px();
         match select::pick(self.doc()?, &space, p, ap) {
             Some(h) => {
                 let mut sel = self.selection();
