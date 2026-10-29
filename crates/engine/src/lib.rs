@@ -357,6 +357,12 @@ pub struct Session {
     pub user_aliases: std::collections::BTreeMap<String, String>,
     /// VNCCad: an active TK / FROM point modifier.
     pub point_mod: Option<PointMod>,
+    /// VNCCad: a one-time object snap for the next point (`END`, `MID`, Shift+right-click menu);
+    /// `Some(0)` = NONe (no snap for this pick). Cleared once the point is given.
+    pub osnap_once: Option<u32>,
+    /// VNCCad: an object-snap tracking line under the cursor (origin, unit direction), set by the
+    /// UI each frame; a typed distance then measures from the tracked point along that line.
+    pub track_line: Option<(Vec2, Vec2)>,
     pub pending_window: Option<PendingWindow>,
     pub untitled_counter: u32,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
@@ -417,6 +423,8 @@ impl Session {
             clipboard_base: Vec2::ZERO,
             user_aliases: Default::default(),
             point_mod: None,
+            osnap_once: None,
+            track_line: None,
             pending_window: None,
             untitled_counter: 0,
             last_dim: None,
@@ -706,6 +714,9 @@ impl Session {
                 return self.start(&last);
             }
             return Ok(());
+        }
+        if matches!(input, Input::Point(_) | Input::Cancel | Input::Pick(_)) {
+            self.osnap_once = None;
         }
         let Some(input) = self.point_modifier(input)? else { return Ok(()) };
         // Generic selection handling during "Select objects:" prompts.
@@ -1104,12 +1115,29 @@ impl Session {
                 _ => {}
             }
         }
+        // VNCCad: one-time object snaps typed at a point prompt (`END`, `MID`, `CEN`, `NON`…).
+        if prompt.accept.point
+            && !prompt.accept.select
+            && let Some(m) = snap::one_shot(tt)
+        {
+            self.osnap_once = Some(m);
+            self.echo(if m == 0 { "Không bắt điểm cho lần chọn này." } else { "of" });
+            return Ok(());
+        }
         if prompt.accept.point {
             let ucs = self.ucs();
             if let Some(p) = prompt::parse_point_ucs(tt, self.last_point, &ucs) {
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the rubber band.
+            // Along an object-snap tracking line: the distance runs from the tracked point.
+            if let (Some((origin, dir)), Some(dist)) = (self.track_line, units::parse_distance(tt))
+                && !prompt.accept.number
+                && dir != Vec2::ZERO
+            {
+                self.track_line = None;
+                return self.input(Input::Point(origin + dir * dist));
+            }
             if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
                 && !prompt.accept.number
             {

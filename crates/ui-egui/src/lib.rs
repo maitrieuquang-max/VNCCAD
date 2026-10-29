@@ -16,10 +16,12 @@ pub mod control;
 pub mod credits;
 pub mod dcl_ui;
 pub mod dialogs;
+pub mod dyninput;
 pub mod gpu;
 pub mod icons;
 pub mod layers;
 pub mod menus;
+pub mod otrack;
 pub mod palettes;
 pub mod parametric;
 pub mod quick;
@@ -342,6 +344,23 @@ impl CadApp {
             if !p.is_empty() {
                 self.open_path(&p);
             }
+        }
+    }
+
+    /// VNCCad: Tab belongs to the command line (Dynamic Input fields, AutoComplete) unless a text
+    /// field has the keyboard; egui would otherwise move the keyboard focus to the next widget.
+    pub fn intercept_keys(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if ctx.egui_wants_keyboard_input() || self.session.current_prompt().is_some_and(|p| p.dialog.is_some()) {
+            return;
+        }
+        let before = raw.events.len();
+        raw.events.retain(
+            |e| !matches!(e, egui::Event::Key { key: egui::Key::Tab, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && !modifiers.command),
+        );
+        let pressed = before - raw.events.len();
+        if pressed > 0 {
+            // Each Tab arrives as a press and a release.
+            self.cmd.pending_tabs += pressed.div_ceil(2);
         }
     }
 

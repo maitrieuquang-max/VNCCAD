@@ -212,6 +212,13 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **Phím SPACE:** nhận cả khi bàn phím/trình duyệt chỉ gửi phím mà không gửi ký tự (bộ gõ IME, bản web); nút trên thanh công cụ không còn "bấm lại" khi nhấn Space/Enter trong lúc đang chạy lệnh (trước đây có thể làm lệnh khởi động lại và mất nét đang vẽ).
 - **Vẽ xong mà không thấy nét:** dòng lệnh báo rõ lý do — layer hiện hành đang tắt/đóng băng, đối tượng đang bị ẩn (ISOLATE), hoặc nét nằm ngoài vùng nhìn (gõ `Z` `E`).
 
+## Đợt sửa 2 – nhập động, bám điểm tạm, Object Snap Tracking
+
+- **Dynamic Input (F12) có ô nhập:** ở lời nhắc chọn điểm có điểm gốc, cạnh con trỏ có hai ô — *Khoảng cách* / *Góc* (LINE, PLINE, MOVE, COPY…), riêng RECTANG là *Dài* / *Rộng*. Gõ số vào ô đang sáng, **Tab** để khóa và chuyển ô (đường kéo theo giá trị đã khóa), Enter/Space để xong. Ví dụ RECTANG: chọn góc 1 → `12` Tab `5` Enter = hình 12×5 theo phía con trỏ. Gõ một số rồi Enter (không Tab) vẫn là nhập khoảng cách trực tiếp như cũ.
+- **Bám điểm tạm (TK) và FROM:** gõ `TK`/`FROM`, hoặc **Shift + chuột phải** (Ctrl + chuột phải) ở lời nhắc chọn điểm để mở menu bắt điểm: TK, From, Endpoint, Midpoint, Intersection, Center, Quadrant, Tangent, Perpendicular, Nearest, None… Các điểm bám TK hiện dấu `+` nối nét đứt, con trỏ chạy vuông góc từ điểm bám cuối; dùng được trong MOVE, COPY và mọi lệnh hỏi điểm.
+- **Bắt điểm một lần:** gõ `END`, `MID`, `CEN`, `QUA`, `INT`, `PER`, `TAN`, `NEA`, `NOD`, `INS`, `NON` tại lời nhắc chọn điểm.
+- **Object Snap Tracking (OTRACK, F11):** dừng con trỏ trên một điểm bắt (khoảng nửa giây) để "nhận" điểm (dấu `+` xanh; dừng lại lần nữa để bỏ). Khi con trỏ thẳng hàng ngang/dọc với điểm đã nhận sẽ hiện đường bám nét đứt và con trỏ bám theo; chỗ hai đường bám cắt nhau cũng bắt được. Gõ số khi đang hiện đường bám = khoảng cách tính từ điểm đã nhận dọc theo đường đó.
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

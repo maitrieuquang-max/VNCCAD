@@ -13,6 +13,10 @@ pub struct CmdLine {
     pub history: Vec<String>,
     pub history_pos: Option<usize>,
     pub expanded: bool,
+    /// VNCCad: Dynamic Input fields (Tab between distance/angle or length/width).
+    pub dynf: crate::dyninput::DynFields,
+    /// VNCCad: Tab presses taken from egui's focus navigation (see `CadApp::intercept_keys`).
+    pub pending_tabs: usize,
 }
 
 /// Matching command names/aliases for AutoComplete: exact aliases first (what Space/Enter
@@ -142,7 +146,9 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                     }
                 }
                 Key::Tab => {
-                    if let Some((id, _)) = suggestions(&app.cmd.buffer).first() {
+                    if !crate::dyninput::tab(app)
+                        && let Some((id, _)) = suggestions(&app.cmd.buffer).first()
+                    {
                         app.cmd.buffer = id.clone();
                     }
                 }
@@ -152,6 +158,14 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                 _ => {}
             },
             _ => {}
+        }
+    }
+    // Tab presses kept from egui (after this frame's typing, so `12` then Tab locks 12).
+    for _ in 0..std::mem::take(&mut app.cmd.pending_tabs).min(8) {
+        if !crate::dyninput::tab(app)
+            && let Some((id, _)) = suggestions(&app.cmd.buffer).first()
+        {
+            app.cmd.buffer = id.clone();
         }
     }
 }
@@ -184,6 +198,12 @@ fn lisp_open(buf: &str) -> bool {
 }
 
 pub fn submit(app: &mut CadApp) {
+    // VNCCad: Dynamic Input fields in use (a value locked with Tab) give the point.
+    if let Some(t) = crate::dyninput::compose(app) {
+        app.cmd.history_pos = None;
+        app.cmdline(&t);
+        return;
+    }
     let text = std::mem::take(&mut app.cmd.buffer);
     app.cmd.history_pos = None;
     if !text.trim().is_empty() && app.session.running.is_none() {

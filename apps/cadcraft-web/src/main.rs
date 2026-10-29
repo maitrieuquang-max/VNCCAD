@@ -118,6 +118,9 @@ mod web {
                 }
             }
         }
+        fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+            self.0.intercept_keys(ctx, raw);
+        }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             self.0.ui(ui);
         }

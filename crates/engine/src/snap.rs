@@ -40,6 +40,31 @@ pub mod mode {
     ];
 }
 
+/// VNCCad: the one-time snap a typed override names (`END`, `MID`, `CEN`, `QUA`, `INT`, `PER`,
+/// `TAN`, `NEA`, `NOD`, `INS`, `GCE`, `APP`, `EXT`, `PAR`), `Some(0)` for `NON`/`NONE`.
+pub fn one_shot(text: &str) -> Option<u32> {
+    let t = text.trim().trim_start_matches('_').to_ascii_lowercase();
+    let m = match t.as_str() {
+        "end" | "endp" | "endpoint" => mode::END,
+        "mid" | "midpoint" => mode::MID,
+        "cen" | "center" | "centre" => mode::CEN,
+        "gce" | "gcen" => mode::GCEN,
+        "nod" | "node" => mode::NOD,
+        "qua" | "quad" | "quadrant" => mode::QUA,
+        "int" | "inter" | "intersection" => mode::INT,
+        "ext" | "extension" => mode::EXT,
+        "ins" | "insert" | "insertion" => mode::INS,
+        "per" | "perp" | "perpendicular" => mode::PER,
+        "tan" | "tangent" => mode::TAN,
+        "nea" | "near" | "nearest" => mode::NEA,
+        "app" | "appint" => mode::APP,
+        "par" | "parallel" => mode::PAR,
+        "non" | "none" => 0,
+        _ => return None,
+    };
+    Some(m)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapHit {

@@ -43,11 +43,15 @@ pub struct Prompt {
     /// VNCCad: the command wants every cursor move (`Input::Motion`) — LISP `(grread T)`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub track: bool,
+    /// VNCCad: Dynamic Input shows length and width fields (RECTANG other corner) instead of
+    /// distance and angle; Tab moves between them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dyn_rect: bool,
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, dialog: None, track: false }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, dialog: None, track: false, dyn_rect: false }
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
         self.keywords = k.iter().map(|s| s.to_string()).collect();
@@ -55,6 +59,10 @@ impl Prompt {
     }
     pub fn dialog(mut self, d: crate::lisp::dcl::Pending) -> Self {
         self.dialog = Some(Box::new(d));
+        self
+    }
+    pub fn dyn_rect(mut self) -> Self {
+        self.dyn_rect = true;
         self
     }
     pub fn base(mut self, p: Vec2) -> Self {

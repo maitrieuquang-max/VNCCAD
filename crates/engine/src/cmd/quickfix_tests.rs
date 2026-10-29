@@ -321,3 +321,53 @@ fn telex_typed_command_names() {
     s.cmdline("ẽplode").unwrap();
     assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("explode"));
 }
+
+/// Đợt 2 (#4): TK inside MOVE and COPY — base and second point from tracking points.
+#[test]
+fn tk_in_move_and_copy() {
+    for cmd in ["move", "copy"] {
+        let mut s = Session::new();
+        s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle;
+        s.set_selection(vec![h]);
+        s.cmdline(cmd).unwrap();
+        // Base point: track from (10,0), then 5 up.
+        s.cmdline("tk").unwrap();
+        s.input(Input::Point(Vec2::new(10.0, 0.0))).unwrap();
+        s.cmdline("@0,5").unwrap();
+        s.input(Input::Enter).unwrap();
+        // Second point via TK too.
+        s.cmdline("tk").unwrap();
+        s.input(Input::Point(Vec2::new(20.0, 5.0))).unwrap();
+        s.input(Input::Enter).unwrap();
+        if s.running.is_some() {
+            s.input(Input::Enter).unwrap();
+        }
+        let EntityKind::Circle(c) = last(&s) else { panic!("{cmd}") };
+        assert!(
+            (c.center.x - 10.0).abs() < 1e-9 && c.center.y.abs() < 1e-9,
+            "{cmd}: {:?} log {:?}",
+            c.center,
+            s.log.iter().rev().take(8).collect::<Vec<_>>()
+        );
+        assert_eq!(count(&s), if cmd == "copy" { 2 } else { 1 });
+    }
+}
+
+/// Đợt 2 (#4, #17): typed one-time snaps and a distance along an object-snap tracking line.
+#[test]
+fn one_shot_snaps_and_tracking_distance() {
+    let mut s = Session::new();
+    s.start("line").unwrap();
+    s.cmdline("mid").unwrap();
+    assert_eq!(s.osnap_once, Some(crate::snap::mode::MID));
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    assert_eq!(s.osnap_once, None);
+    s.cmdline("non").unwrap();
+    assert_eq!(s.osnap_once, Some(0));
+    s.track_line = Some((Vec2::new(14.0, 2.0), Vec2::new(-1.0, 0.0)));
+    s.cmdline("3").unwrap();
+    s.input(Input::Enter).unwrap();
+    let EntityKind::Line(l) = last(&s) else { panic!("no line") };
+    assert!(l.b.xy().near(Vec2::new(11.0, 2.0), 1e-9), "{:?}", l.b);
+}

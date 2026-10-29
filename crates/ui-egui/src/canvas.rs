@@ -134,6 +134,12 @@ pub struct CanvasState {
     hover_at: Option<Pos2>,
     /// Constraint glyphs for the parametric overlay (cached per drawing revision).
     pub param: crate::parametric::Cache,
+    /// VNCCad: Object Snap Tracking state (acquired points, tracking lines).
+    pub otrack: crate::otrack::Track,
+    /// VNCCad: the Shift+right-click object snap menu, open at this screen position.
+    pub snap_menu: Option<Pos2>,
+    /// VNCCad: input time of the current frame (seconds).
+    pub now: f64,
 }
 
 fn color32(c: Rgb) -> Color32 {
@@ -507,14 +513,40 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
         return raw;
     }
     let ap = s.aperture / xf.scale;
-    if let Ok(st) = app.session.state()
-        && let Some(hit) = snap::osnap(&st.doc, &st.edit_space(), raw, ap, s.osmode, base)
-    {
+    // VNCCad: a one-time snap (END, MID… typed or from the Shift+right-click menu) wins.
+    let osmode = match app.session.osnap_once {
+        Some(0) => 0,
+        Some(m) => m,
+        None => s.osmode,
+    };
+    let owner = app.session.running.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+    app.canvas.otrack.sync_owner(&owner);
+    app.session.track_line = None;
+    let hit = app.session.state().ok().and_then(|st| snap::osnap(&st.doc, &st.edit_space(), raw, ap, osmode, base));
+    let tracking = s.otrack && osmode != 0 && osmode & snap::mode::OFF == 0;
+    if tracking {
+        let now = app.canvas.now;
+        app.canvas.otrack.dwell(hit.map(|h| h.point), now);
+    }
+    if let Some(hit) = hit {
+        app.canvas.otrack.lines.clear();
+        app.canvas.otrack.label = None;
         app.canvas.snap = Some(hit);
         return hit.point;
     }
-    let mut p = raw;
     let ucs = app.session.ucs();
+    // VNCCad: TK — after the first tracking point the cursor runs orthogonally from the last one.
+    if let Some(cadcraft_engine::PointMod::Track(pts)) = &app.session.point_mod
+        && let Some(last) = pts.last()
+    {
+        return snap::ortho_ucs(*last, raw, &ucs);
+    }
+    // VNCCad: Object Snap Tracking from acquired points.
+    if tracking && let Some((q, line)) = app.canvas.otrack.align(raw, ucs.angle, xf.scale) {
+        app.session.track_line = line;
+        return q;
+    }
+    let mut p = raw;
     if s.snapmode {
         p = snap::grid_snap_ucs(p, s.snapunit, &ucs);
     }
@@ -528,7 +560,8 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf) -> Vec2 {
             app.canvas.polar_angle = Some(a);
         }
     }
-    p
+    // VNCCad: Dynamic Input values locked with Tab hold the rubber band.
+    crate::dyninput::constrain(app, p)
 }
 
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
@@ -537,6 +570,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let resp = ui.interact(rect, ui.id().with("canvas"), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     app.canvas.rect = Some(rect);
+    app.canvas.now = ui.input(|i| i.time);
     app.session.viewport_px = (f64::from(rect.width()).max(1.0), f64::from(rect.height()).max(1.0));
     if app.canvas.zoom_pending {
         app.canvas.zoom_pending = false;
@@ -731,7 +765,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.session.echo(e.to_string());
         }
     }
-    if inside && pressed_secondary {
+    // VNCCad: Shift+right-click (or Ctrl+right-click) at a point prompt: object snap menu
+    // with TK and FROM, as in AutoCAD.
+    let point_prompt = app.session.current_prompt().is_some_and(|p| p.accept.point && !p.picks_object());
+    let menu_mods = mods.shift
+        || mods.ctrl
+        || ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Secondary, pressed: true, modifiers, .. } if modifiers.shift || modifiers.ctrl)
+            })
+        });
+    if inside && pressed_secondary && menu_mods && point_prompt {
+        app.canvas.snap_menu = hover_pos;
+    } else if inside && pressed_secondary {
         // Right-click acts as Enter while a command runs (the classic CAD default).
         if app.session.running.is_some() {
             let _ = app.session.input(Input::Enter);
@@ -948,6 +994,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let (Some(hit), Some(_)) = (app.canvas.snap, app.canvas.cursor) {
         draw_snap_marker(&painter, xf.to_screen(hit.point), &hit);
     }
+    // VNCCad: Object Snap Tracking and TK.
+    if app.session.running.is_some() {
+        let tk: Vec<Vec2> = match &app.session.point_mod {
+            Some(cadcraft_engine::PointMod::Track(pts)) => pts.clone(),
+            _ => Vec::new(),
+        };
+        crate::otrack::draw(&painter, &xf, &app.canvas.otrack, &tk, view.height * 4.0);
+        if let (Some(l), Some(c)) = (app.canvas.otrack.label.clone(), app.canvas.cursor)
+            && app.canvas.snap.is_none()
+        {
+            tooltip(&painter, xf.to_screen(c) + vec2(16.0, 18.0), &l);
+        }
+    }
     // UCS icon, ViewCube and viewport label.
     if app.ui.show_ucs_icon {
         draw_ucs_icon(&painter, rect, &xf, &app.session.ucs());
@@ -956,6 +1015,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_label(&painter, rect);
+    snap_menu(app, ui);
     // Command line overlay.
     if app.ui.show_command_line {
         crate::cmdline::show(app, ui, rect);
@@ -1012,7 +1072,11 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
 fn dynamic_input(app: &CadApp, p: &egui::Painter, at: Pos2) {
     let Some(prompt) = app.session.current_prompt() else { return };
     let mut text = prompt.message.clone();
-    if !app.cmd.buffer.is_empty() {
+    // VNCCad: distance/angle (or length/width) fields, Tab between them.
+    let fields = crate::dyninput::draw(app, p, at);
+    if fields {
+        // The prompt alone; the values are in the fields.
+    } else if !app.cmd.buffer.is_empty() {
         text = format!("{}: {}", prompt.message, app.cmd.buffer);
     } else if let (Some(base), Some(c)) = (prompt.base, app.canvas.cursor) {
         text = format!(
@@ -1106,4 +1170,62 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<HotGrip> {
         }
     }
     None
+}
+
+/// VNCCad: the object snap menu (Shift+right-click at a point prompt).
+fn snap_menu(app: &mut CadApp, ui: &mut egui::Ui) {
+    let Some(at) = app.canvas.snap_menu else { return };
+    if app.session.running.is_none() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.canvas.snap_menu = None;
+        return;
+    }
+    const ITEMS: &[(&str, &str)] = &[
+        ("Điểm bám tạm (Temporary track point)", "tk"),
+        ("From", "from"),
+        ("", ""),
+        ("Endpoint", "end"),
+        ("Midpoint", "mid"),
+        ("Intersection", "int"),
+        ("Apparent Intersection", "app"),
+        ("Extension", "ext"),
+        ("", ""),
+        ("Center", "cen"),
+        ("Geometric Center", "gce"),
+        ("Quadrant", "qua"),
+        ("Tangent", "tan"),
+        ("", ""),
+        ("Perpendicular", "per"),
+        ("Insert", "ins"),
+        ("Node", "nod"),
+        ("Nearest", "nea"),
+        ("None", "non"),
+        ("", ""),
+        ("Cài đặt bắt điểm…", "dsettings"),
+    ];
+    let mut picked: Option<&str> = None;
+    // Open upwards near the bottom of the window so the whole menu stays visible.
+    let screen = ui.ctx().content_rect();
+    let pivot = if at.y > screen.center().y { egui::Align2::LEFT_BOTTOM } else { egui::Align2::LEFT_TOP };
+    let resp = egui::Area::new(egui::Id::new("vnc_snap_menu")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(at).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(220.0);
+            for (label, cmd) in ITEMS {
+                if label.is_empty() {
+                    ui.separator();
+                } else if ui.add(egui::Button::new(*label).frame(false)).clicked() {
+                    picked = Some(cmd);
+                }
+            }
+        });
+    });
+    if let Some(cmd) = picked {
+        app.canvas.snap_menu = None;
+        if cmd == "dsettings" {
+            app.start("'dsettings");
+        } else {
+            app.cmdline(cmd);
+        }
+    } else if ui.input(|i| i.pointer.any_pressed()) && !resp.response.contains_pointer() && !ui.input(|i| i.pointer.secondary_pressed()) {
+        app.canvas.snap_menu = None;
+    }
 }
