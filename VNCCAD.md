@@ -219,6 +219,13 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **Bắt điểm một lần:** gõ `END`, `MID`, `CEN`, `QUA`, `INT`, `PER`, `TAN`, `NEA`, `NOD`, `INS`, `NON` tại lời nhắc chọn điểm.
 - **Object Snap Tracking (OTRACK, F11):** dừng con trỏ trên một điểm bắt (khoảng nửa giây) để "nhận" điểm (dấu `+` xanh; dừng lại lần nữa để bỏ). Khi con trỏ thẳng hàng ngang/dọc với điểm đã nhận sẽ hiện đường bám nét đứt và con trỏ bám theo; chỗ hai đường bám cắt nhau cũng bắt được. Gõ số khi đang hiện đường bám = khoảng cách tính từ điểm đã nhận dọc theo đường đó.
 
+## Đợt sửa 3 – sửa chữ tại chỗ, bảng, kiểu chữ/kích thước/ghi chú dẫn
+
+- **Sửa chữ ngay trên bản vẽ:** kích đúp TEXT, MTEXT, MLEADER (hoặc gõ `ED`/TEXTEDIT rồi chọn) → ô sửa hiện đúng chỗ dòng chữ. TEXT: Enter xong; MTEXT/MLEADER: Enter xuống dòng, Ctrl+Enter hoặc bấm ra ngoài để xong; Esc bỏ. Nút `…` mở bảng thuộc tính đầy đủ như trước.
+- **Gõ thẳng vào bảng (TABLE):** kích đúp vào một ô để gõ; **Tab**/Shift+Tab sang ô kế, **Enter** xuống ô dưới, Esc thoát. Ô gộp được nhận đúng; công thức (`=SUM(B2:B5)`…) gõ như cũ.
+- **MLEADER:** bấm vào chữ của ghi chú dẫn là chọn được (trước đây phải trúng đường dẫn nên kích đúp không ăn). Trong lệnh có `Options` → `Arrowhead size` (cỡ mũi tên), `sCale` (tỉ lệ chung). Bảng Properties có Contents, Text height, **Arrow size**, **Overall scale** (gõ 2 = phóng to gấp đôi mũi tên, chữ, đoạn gãy). Lệnh `MLEADERSTYLE` (`MLS`) mở hộp thoại tạo/sửa kiểu: cỡ mũi tên, chiều cao chữ, khe hở, đoạn gãy, kiểu chữ.
+- **Tạo kiểu mới một lần bấm:** STYLE (`ST`) và DIMSTYLE (`D`) điền sẵn tên kiểu mới (`Style1`, `Kieu KT 1`… sửa được) — bấm "Tạo mới" là có ngay, kiểu mới thành hiện hành.
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

@@ -21,6 +21,8 @@ pub struct VState {
     pub psm: bool,
     pub alias: Option<AliasDlg>,
     pub xref: bool,
+    /// VNCCad: Multileader Style manager.
+    pub mls: Option<MlsDlg>,
     aliases_loaded: bool,
 }
 
@@ -45,6 +47,7 @@ pub fn route(app: &mut CadApp, id: &str) -> Option<Result<Value, String>> {
             app.session.echo(format!("REINIT: đã nạp lại {n} phím tắt riêng."));
         }
         "xref" if has_doc => app.vd.xref = true,
+        "mleaderstyle" if has_doc => app.vd.mls = Some(MlsDlg::load(app, None)),
         _ => return None,
     }
     Some(Ok(Value::Null))
@@ -86,6 +89,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     psm_dialog(app, ctx);
     alias_dialog(app, ctx);
     xref_dialog(app, ctx);
+    mls_dialog(app, ctx);
 }
 
 fn run_echo(app: &mut CadApp, id: &str, p: Value) -> bool {
@@ -687,8 +691,14 @@ impl TStyleDlg {
         let current = d.map(|d| d.header.str("TEXTSTYLE", "Standard")).unwrap_or_else(|| "Standard".into());
         let sel = name.map(str::to_string).unwrap_or_else(|| current.clone());
         let cur = d.and_then(|d| d.text_style(&sel).cloned()).unwrap_or_default();
-        TStyleDlg { sel: cur.name.clone(), cur, new_name: String::new(), current }
+        let taken: Vec<String> = d.map(|d| d.text_styles.iter().map(|t| t.name.clone()).collect()).unwrap_or_default();
+        TStyleDlg { sel: cur.name.clone(), cur, new_name: next_free(&taken, "Style"), current }
     }
+}
+
+/// VNCCad: a free name for a new style (`Style1`, `Style2`…), so New works with one click.
+fn next_free(taken: &[String], stem: &str) -> String {
+    (1..10_000).map(|i| format!("{stem}{i}")).find(|n| !taken.iter().any(|t| t.eq_ignore_ascii_case(n))).unwrap_or_else(|| stem.to_string())
 }
 
 fn tstyle_dialog(app: &mut CadApp, ctx: &egui::Context) {
@@ -800,9 +810,12 @@ fn tstyle_dialog(app: &mut CadApp, ctx: &egui::Context) {
             }
         }
         Some("new") => {
-            let n = st.new_name.trim().to_string();
+            let mut n = st.new_name.trim().to_string();
             if n.is_empty() {
-                app.session.echo("Nhập tên kiểu chữ mới.");
+                n = next_free(&names, "Style");
+            }
+            if names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                app.session.echo(format!("Đã có kiểu chữ {n} — đặt tên khác."));
             } else if run_echo(app, "style", style_params(&n, &st.cur, true)) {
                 app.session.echo(format!("Đã tạo kiểu chữ {n} (hiện hành)."));
                 st = TStyleDlg::load(app, Some(&n));
@@ -925,7 +938,9 @@ impl DStyleDlg {
                 (*var, dv)
             })
             .collect();
-        DStyleDlg { sel: st.name.clone(), current, vals, tab: 2, new_name: String::new(), copy_from: st.name }
+        let taken: Vec<String> = app.session.doc().map(|d| d.dim_styles.iter().map(|x| x.name.clone()).collect()).unwrap_or_default();
+        let new_name = next_free(&taken, "Kieu KT ");
+        DStyleDlg { sel: st.name.clone(), current, vals, tab: 2, new_name, copy_from: st.name }
     }
 }
 
@@ -1031,10 +1046,11 @@ fn dstyle_dialog(app: &mut CadApp, ctx: &egui::Context) {
             }
         }
         Some("new") => {
-            let n = st.new_name.trim().to_string();
+            let mut n = st.new_name.trim().to_string();
             if n.is_empty() {
-                app.session.echo("Nhập tên kiểu kích thước mới.");
-            } else if names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                n = next_free(&names, "Kieu KT ");
+            }
+            if names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
                 app.session.echo(format!("Đã có kiểu {n}."));
             } else if run_echo(app, "dimstyle", json!({ "name": n, "copyFrom": st.copy_from, "current": true })) {
                 app.session.echo(format!("Đã tạo kiểu kích thước {n} (hiện hành) — sửa các thông số bên phải rồi bấm Áp dụng."));
@@ -1467,4 +1483,127 @@ fn xref_dialog(app: &mut CadApp, ctx: &egui::Context) {
         run_echo(app, "xref", json!({ "action": a, "name": n }));
     }
     app.vd.xref = open;
+}
+
+// =====================================================================================
+// MLEADERSTYLE (VNCCad)
+
+pub struct MlsDlg {
+    sel: String,
+    cur: cadcraft_doc::MLeaderStyle,
+    current: String,
+    new_name: String,
+}
+
+impl MlsDlg {
+    fn load(app: &CadApp, name: Option<&str>) -> Self {
+        let d = app.session.doc().ok();
+        let current = d.map(|d| d.header.str("CMLEADERSTYLE", "Standard")).unwrap_or_else(|| "Standard".into());
+        let sel = name.map(str::to_string).unwrap_or_else(|| current.clone());
+        let cur = d
+            .and_then(|d| d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&sel)).cloned())
+            .unwrap_or(cadcraft_doc::MLeaderStyle { name: sel.clone(), ..Default::default() });
+        let taken: Vec<String> = d.map(|d| d.mleader_styles.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
+        MlsDlg { sel: cur.name.clone(), cur, current, new_name: next_free(&taken, "Leader") }
+    }
+}
+
+fn mls_dialog(app: &mut CadApp, ctx: &egui::Context) {
+    let Some(mut st) = app.vd.mls.take() else { return };
+    let mut names: Vec<String> = app.session.doc().map(|d| d.mleader_styles.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
+    if names.is_empty() {
+        names.push("Standard".into());
+    }
+    let styles = text_styles(app);
+    let mut open = true;
+    let mut action: Option<&str> = None;
+    let mut select: Option<String> = None;
+    egui::Window::new("Multileader Style — Kiểu ghi chú dẫn").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+        ui.label(format!("Kiểu hiện hành: {}", st.current));
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_max_width(170.0);
+                for n in &names {
+                    if ui.selectable_label(*n == st.sel, n).clicked() {
+                        select = Some(n.clone());
+                    }
+                }
+                if ui.button("Đặt hiện hành").clicked() {
+                    action = Some("current");
+                }
+                ui.separator();
+                ui.label("Kiểu mới");
+                ui.add(egui::TextEdit::singleline(&mut st.new_name).desired_width(160.0));
+                if ui.button("Tạo mới (New)").clicked() {
+                    action = Some("new");
+                }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.heading(&st.sel);
+                egui::Grid::new("mls_grid").num_columns(2).show(ui, |ui| {
+                    ui.label("Cỡ mũi tên (Arrowhead size)");
+                    num_edit(ui, &mut st.cur.arrow_size, 0.01);
+                    ui.end_row();
+                    ui.label("Chiều cao chữ");
+                    num_edit(ui, &mut st.cur.text_height, 0.01);
+                    ui.end_row();
+                    ui.label("Khe hở chữ (Landing gap)");
+                    num_edit(ui, &mut st.cur.landing_gap, 0.01);
+                    ui.end_row();
+                    ui.label("Đoạn gãy (Dogleg)");
+                    num_edit(ui, &mut st.cur.dogleg, 0.01);
+                    ui.end_row();
+                    ui.label("Kiểu chữ");
+                    combo(ui, "mls_ts", &mut st.cur.text_style, &styles);
+                    ui.end_row();
+                });
+                ui.label(RichText::new("Kích thước thật = giá trị × DIMSCALE. Cỡ từng ghi chú: Properties → Arrow size / Overall scale.").small());
+                if ui.button("Áp dụng (Apply)").clicked() {
+                    action = Some("apply");
+                }
+            });
+        });
+    });
+    let params = |name: &str, c: &cadcraft_doc::MLeaderStyle, current: bool| {
+        json!({
+            "name": name,
+            "arrowSize": c.arrow_size,
+            "textHeight": c.text_height,
+            "landingGap": c.landing_gap,
+            "dogleg": c.dogleg,
+            "textStyle": c.text_style,
+            "current": current,
+        })
+    };
+    match action {
+        Some("apply") => {
+            let p = params(&st.sel, &st.cur, st.sel.eq_ignore_ascii_case(&st.current));
+            if run_echo(app, "mleaderstyle", p) {
+                app.session.echo(format!("Đã cập nhật kiểu ghi chú dẫn {}.", st.sel));
+            }
+        }
+        Some("new") => {
+            let mut n = st.new_name.trim().to_string();
+            if n.is_empty() {
+                n = next_free(&names, "Leader");
+            }
+            if names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                app.session.echo(format!("Đã có kiểu {n} — đặt tên khác."));
+            } else if run_echo(app, "mleaderstyle", params(&n, &st.cur, true)) {
+                app.session.echo(format!("Đã tạo kiểu ghi chú dẫn {n} (hiện hành)."));
+                st = MlsDlg::load(app, Some(&n));
+            }
+        }
+        Some("current") if run_echo(app, "mleaderstyle", json!({ "name": st.sel, "current": true })) => {
+            st = MlsDlg::load(app, Some(&st.sel.clone()));
+        }
+        _ => {}
+    }
+    if let Some(n) = select {
+        st = MlsDlg::load(app, Some(&n));
+    }
+    if open {
+        app.vd.mls = Some(st);
+    }
 }

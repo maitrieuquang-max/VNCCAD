@@ -249,6 +249,34 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         t.rotation = x.to_radians();
                     }
                 }
+                // VNCCad: multileader text, sizes and an overall scale (arrow, text, dogleg).
+                EntityKind::MLeader(m) => {
+                    if let Some(v) = str_param(p, "text")
+                        && let Some(t) = &mut m.text
+                    {
+                        t.contents = v.replace('\n', "\\P");
+                    }
+                    if let Some(x) = num("height").filter(|x| *x > 0.0)
+                        && let Some(t) = &mut m.text
+                    {
+                        t.height = x;
+                    }
+                    if let Some(x) = num("arrowSize").filter(|x| *x >= 0.0) {
+                        m.arrow_size = x;
+                    }
+                    if let Some(k) = num("scaleBy").filter(|k| *k > 0.0 && *k < 1e6) {
+                        m.arrow_size *= k;
+                        m.dogleg *= k;
+                        if let Some(t) = &mut m.text {
+                            t.height *= k;
+                            // Keep the text beside the landing.
+                            let off = t.insert.xy() - m.landing.xy();
+                            let at = m.landing.xy() + off * k;
+                            t.insert.x = at.x;
+                            t.insert.y = at.y;
+                        }
+                    }
+                }
                 EntityKind::LwPolyline(pl) => {
                     if let Some(x) = num("width").filter(|x| *x >= 0.0) {
                         pl.const_width = x;

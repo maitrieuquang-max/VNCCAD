@@ -799,6 +799,22 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 num(ui, "Text height", "height", tx.height, &mut set, &ids);
                 num(ui, "Defined width", "width", tx.width, &mut set, &ids);
             }
+            // VNCCad: multileader — text, arrowhead size and an overall scale.
+            EntityKind::MLeader(ml) => {
+                if let Some(tx) = &ml.text {
+                    prop_row(ui, "Contents", |ui| {
+                        if let Some(s) = edit_field(ui, ui.id().with(("mltxt", &ids)), tx.contents.replace("\\P", "\n")) {
+                            set = Some(json!({ "handles": ids, "text": s }));
+                        }
+                    });
+                    num(ui, "Text height", "height", tx.height, &mut set, &ids);
+                }
+                num(ui, "Arrow size", "arrowSize", ml.arrow_size, &mut set, &ids);
+                num(ui, "Overall scale", "scaleBy", 1.0, &mut set, &ids);
+                prop_row(ui, "Style", |ui| {
+                    value_box(ui, &ml.style, true, true);
+                });
+            }
             EntityKind::LwPolyline(pl) => {
                 num(ui, "Global width", "width", pl.const_width, &mut set, &ids);
                 let g = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed };

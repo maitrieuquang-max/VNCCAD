@@ -86,6 +86,16 @@ pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
     if filled && entity_bounds(d, e, 0).contains(p) {
         best = 0.0;
     }
+    // VNCCad: a click on a multileader's text picks the multileader (to edit its text).
+    if let EntityKind::MLeader(m) = &e.kind
+        && let Some(t) = &m.text
+    {
+        let te = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::MText(t.clone()) };
+        let b = entity_bounds(d, &te, 0);
+        if !b.is_empty() && b.expand(tol).contains(p) {
+            best = 0.0;
+        }
+    }
     // VNCCad: a click anywhere inside a pattern hatch picks it (lines nearby still win).
     if let EntityKind::Hatch(h) = &e.kind
         && !h.solid

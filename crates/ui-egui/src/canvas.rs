@@ -731,7 +731,39 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     {
         app.session.pending_window = None;
         app.session.set_selection(vec![h]);
-        crate::vdlg::open_edit(app, h);
+        // VNCCad: text, MTEXT, MLEADER and table cells are edited where they sit.
+        if !crate::inplace::start(app, h, w) {
+            crate::vdlg::open_edit(app, h);
+        }
+        return;
+    }
+    // VNCCad: a click on the drawing outside the in-place text editor keeps the text and does
+    // nothing else.
+    if inside && pressed_primary && app.inplace.is_some() {
+        crate::inplace::finish(app);
+        return;
+    }
+    // VNCCad: TEXTEDIT (ED, DDEDIT) — picking a text, MTEXT, MLEADER or table opens the in-place
+    // editor, as in AutoCAD.
+    if inside
+        && pressed_primary
+        && app.session.running.as_ref().is_some_and(|r| r.id == "textedit")
+        && let Some(w) = raw_world
+        && let Ok(st) = app.session.state()
+        && let Some(h) = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pick_px() / scale)
+        && st.doc.entity(h).is_some_and(|e| {
+            matches!(
+                e.kind,
+                cadcraft_doc::EntityKind::Text(_)
+                    | cadcraft_doc::EntityKind::MText(_)
+                    | cadcraft_doc::EntityKind::MLeader(_)
+                    | cadcraft_doc::EntityKind::Table(_)
+            )
+        })
+    {
+        app.session.cancel();
+        app.session.log.pop();
+        crate::inplace::start(app, h, w);
         return;
     }
     // Clicks.
@@ -1016,6 +1048,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     viewport_label(&painter, rect);
     snap_menu(app, ui);
+    crate::inplace::show(app, ui, &xf);
     // Command line overlay.
     if app.ui.show_command_line {
         crate::cmdline::show(app, ui, rect);

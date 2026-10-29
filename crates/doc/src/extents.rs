@@ -96,6 +96,14 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             let mut b = Bounds2::from_points(m.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())));
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
+                // VNCCad: the whole text box, so a click on the text finds the multileader.
+                if depth < MAX_BLOCK_DEPTH {
+                    let te = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::MText(t.clone()) };
+                    let tb = entity_bounds(d, &te, depth + 1);
+                    if !tb.is_empty() {
+                        b = b.union(&tb);
+                    }
+                }
             }
             b
         }

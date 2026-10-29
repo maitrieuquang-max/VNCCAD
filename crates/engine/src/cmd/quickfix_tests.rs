@@ -371,3 +371,41 @@ fn one_shot_snaps_and_tracking_distance() {
     let EntityKind::Line(l) = last(&s) else { panic!("no line") };
     assert!(l.b.xy().near(Vec2::new(11.0, 2.0), 1e-9), "{:?}", l.b);
 }
+
+/// Đợt 3 (#10): MLEADER Options set the arrowhead size and an overall scale; Properties scale it.
+#[test]
+fn mleader_arrow_size_and_scale() {
+    let mut s = Session::new();
+    s.start("mleader").unwrap();
+    s.cmdline("O").unwrap();
+    s.cmdline("A").unwrap();
+    s.cmdline("0.5").unwrap();
+    s.cmdline("C").unwrap();
+    s.cmdline("2").unwrap();
+    s.input(Input::Enter).unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    s.input(Input::Point(Vec2::new(3.0, 2.0))).unwrap();
+    s.cmdline("Ghi chú").unwrap();
+    let EntityKind::MLeader(m) = last(&s) else { panic!("no mleader: {:?}", s.log) };
+    assert!((m.arrow_size - 1.0).abs() < 1e-9, "{}", m.arrow_size);
+    let h0 = m.text.as_ref().unwrap().height;
+    let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("properties.set", &json!({"handles": [h], "scaleBy": 0.5, "text": "Mới"})).unwrap();
+    let EntityKind::MLeader(m) = last(&s) else { panic!() };
+    assert!((m.arrow_size - 0.5).abs() < 1e-9);
+    let t = m.text.unwrap();
+    assert!((t.height - h0 * 0.5).abs() < 1e-9);
+    assert_eq!(t.contents, "Mới");
+}
+
+/// Đợt 3 (#5): clicking a multileader's text picks it (double-click then edits the text).
+#[test]
+fn mleader_picked_by_its_text() {
+    let mut s = Session::new();
+    let h = s.execute("mleader", &json!({"points": [[2, -1], [4, -2]], "text": "GHI CHU"})).unwrap();
+    let h = cadcraft_doc::Handle::parse_hex(h["handle"].as_str().unwrap()).unwrap();
+    let EntityKind::MLeader(m) = last(&s) else { panic!() };
+    let t = m.text.unwrap();
+    let probe = t.insert.xy() + Vec2::new(t.height * 2.0, 0.0);
+    assert_eq!(crate::select::pick(s.doc().unwrap(), &cadcraft_doc::Space::Model, probe, 0.02), Some(h), "{probe:?}");
+}

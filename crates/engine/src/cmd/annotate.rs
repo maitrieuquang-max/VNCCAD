@@ -1214,13 +1214,65 @@ impl Interactive for ChainM {
 struct MLeaderM {
     pts: Vec<Vec2>,
     landed: bool,
+    /// VNCCad: Options — 1 = option list, 2 = arrowhead size, 3 = scale.
+    asking: u8,
+    /// Arrowhead size for this leader (`None` = from the style).
+    arrow: Option<f64>,
+    /// Overall scale of this leader (arrow, text, dogleg); 0 = 1.
+    scale: f64,
+}
+
+impl MLeaderM {
+    /// The leader with this command's options applied.
+    fn kind(&self, s: &Session, pts: &[Vec2], text: &str) -> Option<EntityKind> {
+        let mut k = mleader_kind(s, pts, text)?;
+        if let EntityKind::MLeader(m) = &mut k {
+            if let Some(a) = self.arrow {
+                m.arrow_size = a;
+            }
+            let f = if self.scale > 0.0 { self.scale } else { 1.0 };
+            if (f - 1.0).abs() > 1e-12 {
+                m.arrow_size *= f;
+                m.dogleg *= f;
+                if let Some(t) = &mut m.text {
+                    t.height *= f;
+                    let at = m.landing.xy() + (t.insert.xy() - m.landing.xy()) * f;
+                    t.insert.x = at.x;
+                    t.insert.y = at.y;
+                }
+            }
+        }
+        Some(k)
+    }
 }
 
 impl Interactive for MLeaderM {
     fn name(&self) -> &'static str {
         "MLEADER"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn prompt(&self, s: &Session) -> Prompt {
+        match self.asking {
+            1 => {
+                return Prompt::new("Enter an option", super::curves::KW).kw(&["Arrowhead size", "sCale", "eXit options"]).default("eXit options");
+            }
+            2 => {
+                let cur = self.arrow.unwrap_or_else(|| {
+                    s.doc()
+                        .ok()
+                        .and_then(|d| {
+                            let n = d.header.str("CMLEADERSTYLE", "Standard");
+                            d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&n)).map(|m| m.arrow_size * d.header.f64("DIMSCALE", 1.0))
+                        })
+                        .unwrap_or(0.18)
+                });
+                return Prompt::new("Specify arrowhead size", Accept::NUMBER).default(format!("{cur:.4}"));
+            }
+            3 => {
+                let f = if self.scale > 0.0 { self.scale } else { 1.0 };
+                return Prompt::new("Specify overall scale", Accept::NUMBER).default(format!("{f}"));
+            }
+            _ => {}
+        }
         if self.landed {
             return Prompt::new("Enter leader text", Accept::TEXT);
         }
@@ -1230,12 +1282,46 @@ impl Interactive for MLeaderM {
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match self.asking {
+            1 => {
+                self.asking = match &i {
+                    Input::Keyword(k) | Input::Text(k) if k.eq_ignore_ascii_case("Arrowhead size") || k.eq_ignore_ascii_case("a") => 2,
+                    Input::Keyword(k) | Input::Text(k) if k.eq_ignore_ascii_case("sCale") || k.eq_ignore_ascii_case("c") => 3,
+                    _ => 0,
+                };
+                return Ok(Step::Continue);
+            }
+            2 | 3 => {
+                let v = match &i {
+                    Input::Text(t) => Some(
+                        super::machines::number(t).filter(|v| *v > 0.0).ok_or_else(|| EngineError::Other("Requires a positive number.".into()))?,
+                    ),
+                    _ => None,
+                };
+                if let Some(v) = v {
+                    if self.asking == 2 {
+                        self.arrow = Some(v);
+                    } else {
+                        self.scale = v;
+                    }
+                }
+                self.asking = 1;
+                return Ok(Step::Continue);
+            }
+            _ => {}
+        }
+        if let Input::Keyword(k) = &i
+            && k == "Options"
+        {
+            self.asking = 1;
+            return Ok(Step::Continue);
+        }
         if self.landed {
             let t = match i {
                 Input::Text(t) => t,
                 _ => String::new(),
             };
-            let k = mleader_kind(s, &self.pts, &t).ok_or_else(|| EngineError::Other("bad leader".into()))?;
+            let k = self.kind(s, &self.pts, &t).ok_or_else(|| EngineError::Other("bad leader".into()))?;
             s.add_entity(k)?;
             return Ok(Step::Done);
         }
@@ -1257,7 +1343,7 @@ impl Interactive for MLeaderM {
         }
         let mut pts = self.pts.clone();
         pts.push(c);
-        mleader_kind(s, &pts, "").into_iter().collect()
+        self.kind(s, &pts, "").into_iter().collect()
     }
 }
 

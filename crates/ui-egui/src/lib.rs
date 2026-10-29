@@ -19,6 +19,7 @@ pub mod dialogs;
 pub mod dyninput;
 pub mod gpu;
 pub mod icons;
+pub mod inplace;
 pub mod layers;
 pub mod menus;
 pub mod otrack;
@@ -146,6 +147,8 @@ pub struct CadApp {
     pub new_tool: (String, String),
     /// VNCCad: the object editor, units, styles, plot and alias dialogs.
     pub vd: vdlg::VState,
+    /// VNCCad: a text being edited in place on the drawing.
+    pub inplace: Option<inplace::InPlace>,
 }
 
 impl CadApp {
@@ -172,6 +175,7 @@ impl CadApp {
             adc_kind: "blocks".into(),
             new_tool: (String::new(), String::new()),
             vd: vdlg::VState::default(),
+            inplace: None,
         }
     }
 
