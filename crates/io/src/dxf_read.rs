@@ -946,6 +946,19 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
+            // VNCCad: the model view the drawing was saved with (*ACTIVE viewport), so it opens
+            // where it was left instead of on its extents.
+            "VPORT" => {
+                let name = t.s(2).unwrap_or_default();
+                let c = t.p(12);
+                if name.eq_ignore_ascii_case("*ACTIVE")
+                    && let Some(h) = t.f(40).filter(|h| h.is_finite() && *h > 0.0)
+                    && c.is_finite()
+                    && d.header.get("VNC_ACTIVEVIEW").is_none()
+                {
+                    d.header.set("VNC_ACTIVEVIEW", HVal::Point(Vec3::new(c.x, c.y, h)));
+                }
+            }
             "UCS" => {
                 let name = t.s(2).unwrap_or_default();
                 let (o, x, y) = (t.p(10), t.p(11), t.p(12));

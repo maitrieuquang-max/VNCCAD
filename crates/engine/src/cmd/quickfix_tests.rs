@@ -409,3 +409,27 @@ fn mleader_picked_by_its_text() {
     let probe = t.insert.xy() + Vec2::new(t.height * 2.0, 0.0);
     assert_eq!(crate::select::pick(s.doc().unwrap(), &cadcraft_doc::Space::Model, probe, 0.02), Some(h), "{probe:?}");
 }
+
+/// Đợt 4 (#19): a layout whose title block sits far from the origin opens on its overall
+/// viewport (id 1), not on an empty sheet; a drawing opens at its saved model view.
+#[test]
+fn layout_opens_on_its_contents_and_saved_model_view() {
+    let mut d = cadcraft_doc::Drawing::default();
+    d.layouts.push(cadcraft_doc::Layout::new("DRAWINGS", 1));
+    let sp = cadcraft_doc::Space::Paper("DRAWINGS".into());
+    let k = |v: serde_json::Value| -> EntityKind { serde_json::from_value(v).unwrap() };
+    let vp = k(json!({"type": "viewport", "id": 1, "center": {"x": 3_335_000.0, "y": 5_630_000.0, "z": 0.0}, "width": 4800.0, "height": 1800.0,
+        "viewCenter": {"x": 3_335_000.0, "y": 5_630_000.0}, "viewHeight": 1800.0, "frozenLayers": [], "locked": false}));
+    d.add(&sp, Default::default(), vp).unwrap();
+    let line = |a: [f64; 2], b: [f64; 2]| k(json!({"type": "line", "a": {"x": a[0], "y": a[1], "z": 0.0}, "b": {"x": b[0], "y": b[1], "z": 0.0}}));
+    d.add(&sp, Default::default(), line([3_333_000.0, 5_629_500.0], [3_337_000.0, 5_631_000.0])).unwrap();
+    d.add(&cadcraft_doc::Space::Model, Default::default(), line([0.0, 0.0], [1000.0, 1000.0])).unwrap();
+    d.header.set("VNC_ACTIVEVIEW", cadcraft_doc::HVal::Point(cadcraft_geom::Vec3::new(500.0, 500.0, 20.0)));
+    let mut s = Session::new();
+    s.open_drawing(d, "t", None);
+    let v = s.state().unwrap().view();
+    assert!((v.center.x - 500.0).abs() < 1e-9 && (v.height - 20.0).abs() < 1e-9, "{v:?}");
+    s.execute("layout.set", &json!({"name": "DRAWINGS"})).unwrap();
+    let v = s.state().unwrap().view();
+    assert!((v.center.x - 3_335_000.0).abs() < 1.0, "{v:?}");
+}

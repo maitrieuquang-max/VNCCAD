@@ -1387,3 +1387,12 @@ fn mline_and_tolerance_roundtrip() {
         assert!(t2.insert.xy().dist(tol.insert.xy()) < 1e-9, "{name}");
     }
 }
+
+/// VNCCad: the *ACTIVE viewport's view is kept so the drawing opens where it was saved.
+#[test]
+fn active_vport_view_is_read() {
+    let dxf = "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nVPORT\n0\nVPORT\n2\n*Active\n12\n535112.0\n22\n1777960.5\n40\n1197.0\n41\n2.65\n0\nENDTAB\n0\nENDSEC\n0\nEOF\n";
+    let d = crate::read_dxf(dxf.as_bytes()).unwrap();
+    let p = d.header.point("VNC_ACTIVEVIEW").unwrap();
+    assert!((p.x - 535112.0).abs() < 1e-6 && (p.y - 1777960.5).abs() < 1e-6 && (p.z - 1197.0).abs() < 1e-6);
+}

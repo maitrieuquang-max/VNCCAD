@@ -1,6 +1,6 @@
 //! View menu: ZOOM, PAN, REGEN, REDRAW, layout switching.
 
-use cadcraft_doc::{Space, entity_bounds};
+use cadcraft_doc::{EntityKind, Space, entity_bounds};
 use cadcraft_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
@@ -223,7 +223,30 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
         let page = st.doc.layout(n).map(|l| l.page.clone()).unwrap_or_default();
         let (w, h) = if page.landscape { (page.height_mm, page.width_mm) } else { (page.width_mm, page.height_mm) };
         let unit = if st.doc.header.i64("MEASUREMENT", 0) == 1 { 1.0 } else { 1.0 / 25.4 };
-        st.set_view_quiet(View { center: Vec2::new(w * unit / 2.0, h * unit / 2.0), height: h * unit * 1.15 });
+        let mut view = View { center: Vec2::new(w * unit / 2.0, h * unit / 2.0), height: h * unit * 1.15 };
+        // VNCCad: a layout read from a file opens where it was left in AutoCAD — the saved
+        // paper view, or the layout's overall viewport (id 1) — and otherwise on its contents
+        // when they lie off the sheet. Layouts used to open on an empty sheet at the origin
+        // while the title block sat far away, so they looked missing.
+        if let Some(l) = st.doc.layout(n) {
+            let overall = l.entities.iter().find_map(|e| match &e.kind {
+                EntityKind::Viewport(v) if v.id == 1 && v.height > 0.0 && v.height.is_finite() && v.center.x.is_finite() => {
+                    Some(View { center: v.center.xy(), height: v.height * 1.05 })
+                }
+                _ => None,
+            });
+            let saved = l.view.filter(|(c, h)| *h > 0.0 && h.is_finite() && c.is_finite()).map(|(c, h)| View { center: c, height: h });
+            let ext = st.doc.extents(&space);
+            let sheet = cadcraft_geom::Bounds2::new(Vec2::ZERO, Vec2::new(w * unit, h * unit));
+            let content = (!ext.is_empty() && !ext.intersects(&sheet)).then(|| View {
+                center: (ext.min + ext.max) * 0.5,
+                height: ((ext.max.y - ext.min.y).max((ext.max.x - ext.min.x) / 1.6) * 1.1).max(1e-6),
+            });
+            if let Some(v) = saved.or(overall).or(content) {
+                view = v;
+            }
+        }
+        st.set_view_quiet(view);
     }
     s.touch();
     ok()

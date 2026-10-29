@@ -574,7 +574,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     app.session.viewport_px = (f64::from(rect.width()).max(1.0), f64::from(rect.height()).max(1.0));
     if app.canvas.zoom_pending {
         app.canvas.zoom_pending = false;
-        let _ = app.session.zoom_extents();
+        let _ = app.session.zoom_initial();
     }
     let Ok(st) = app.session.state() else { return };
     let view = st.view();

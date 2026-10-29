@@ -226,6 +226,11 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **MLEADER:** bấm vào chữ của ghi chú dẫn là chọn được (trước đây phải trúng đường dẫn nên kích đúp không ăn). Trong lệnh có `Options` → `Arrowhead size` (cỡ mũi tên), `sCale` (tỉ lệ chung). Bảng Properties có Contents, Text height, **Arrow size**, **Overall scale** (gõ 2 = phóng to gấp đôi mũi tên, chữ, đoạn gãy). Lệnh `MLEADERSTYLE` (`MLS`) mở hộp thoại tạo/sửa kiểu: cỡ mũi tên, chiều cao chữ, khe hở, đoạn gãy, kiểu chữ.
 - **Tạo kiểu mới một lần bấm:** STYLE (`ST`) và DIMSTYLE (`D`) điền sẵn tên kiểu mới (`Style1`, `Kieu KT 1`… sửa được) — bấm "Tạo mới" là có ngay, kiểu mới thành hiện hành.
 
+## Đợt sửa 4a – mở bản vẽ đúng chỗ, Layout hiện nội dung
+
+- **Layout có sẵn hiện ngay nội dung:** layout đọc từ file mở đúng khung nhìn đã lưu trong AutoCAD (khung nhìn tổng id 1 của layout), không còn mở ra tờ giấy trắng ở gốc tọa độ trong khi khung tên nằm ở tọa độ xa (trường hợp hay gặp với bản vẽ hạ tầng tọa độ VN2000) — trước đây trông như layout không được đọc.
+- **Mở bản vẽ đúng vùng đã lưu:** Model mở tại khung nhìn lúc lưu file (*ACTIVE) thay vì Zoom Extents — bản vẽ có vài đối tượng lạc ở gốc 0,0 hoặc ở hệ tọa độ khác không còn bị thu nhỏ thành chấm.
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

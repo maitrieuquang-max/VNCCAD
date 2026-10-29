@@ -459,6 +459,10 @@ impl Session {
                 height: (ext.height().max(ext.width() * self.viewport_px.1 / self.viewport_px.0.max(1.0)) * 1.1).max(1e-6),
             });
         }
+        // VNCCad: open where the drawing was saved (AutoCAD's *ACTIVE view).
+        if let Some(v) = saved_model_view(&st.doc, &ext) {
+            st.set_view_quiet(v);
+        }
         self.docs.push(st);
         self.active = self.docs.len() - 1;
         self.active
@@ -1300,6 +1304,20 @@ impl Session {
 
     // ---------------- views ----------------
 
+    /// VNCCad: the first view of a newly opened drawing — in Model, the view it was saved with
+    /// (AutoCAD's *ACTIVE viewport) when that shows part of the drawing; otherwise its extents.
+    pub fn zoom_initial(&mut self) -> Result<()> {
+        if self.space() == Space::Model {
+            let d = self.doc()?;
+            if let Some(v) = saved_model_view(d, &d.extents(&Space::Model)) {
+                self.state_mut()?.set_view_quiet(v);
+                self.touch();
+                return Ok(());
+            }
+        }
+        self.zoom_extents()
+    }
+
     pub fn zoom_extents(&mut self) -> Result<()> {
         let space = self.space();
         let ext = self.doc()?.extents(&space);
@@ -1381,3 +1399,15 @@ fn default_clock() -> Option<fn() -> f64> {
 
 #[cfg(test)]
 mod testkit_tests;
+
+/// VNCCad: the model view a drawing was saved with (`VNC_ACTIVEVIEW`, read from the *ACTIVE
+/// viewport), when it shows part of the drawing.
+fn saved_model_view(d: &Drawing, ext: &Bounds2) -> Option<View> {
+    let p = d.header.point("VNC_ACTIVEVIEW")?;
+    if !(p.z > 0.0 && p.z.is_finite() && p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let half = p.z / 2.0;
+    let seen = Bounds2::new(Vec2::new(p.x - half * 3.0, p.y - half), Vec2::new(p.x + half * 3.0, p.y + half));
+    (ext.is_empty() || ext.intersects(&seen)).then(|| View { center: Vec2::new(p.x, p.y), height: p.z })
+}
