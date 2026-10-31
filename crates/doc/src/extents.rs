@@ -14,6 +14,34 @@ fn text_box(insert: Vec2, height: f64, len: usize, width_factor: f64, rotation: 
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    entity_bounds_with(d, e, depth, &mut BoundsCache::default())
+}
+
+/// VNCCad: bounds of block contents already measured (by block name, in block coordinates).
+/// Drawings with many references to large blocks took seconds to measure without it: every
+/// reference walked its whole block tree again.
+#[derive(Default)]
+pub struct BoundsCache {
+    blocks: std::collections::HashMap<String, Bounds2>,
+}
+
+fn block_inner(d: &Drawing, name: &str, depth: usize, cache: &mut BoundsCache) -> Option<Bounds2> {
+    if let Some(b) = cache.blocks.get(name) {
+        return Some(*b);
+    }
+    let blk = d.block(name)?;
+    let mut inner = Bounds2::EMPTY;
+    for be in blk.entities.iter() {
+        inner = inner.union(&entity_bounds_with(d, be, depth + 1, cache));
+    }
+    if cache.blocks.len() < 100_000 {
+        cache.blocks.insert(name.to_string(), inner);
+    }
+    Some(inner)
+}
+
+/// [`entity_bounds`] sharing a cache of block bounds between calls.
+pub fn entity_bounds_with(d: &Drawing, e: &Entity, depth: usize, cache: &mut BoundsCache) -> Bounds2 {
     match &e.kind {
         EntityKind::Text(t) => text_box(
             t.align_pt.filter(|_| t.halign != crate::HAlign::Left).unwrap_or(t.insert).xy(),
@@ -49,10 +77,7 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             }
             let Some(blk) = d.block(&ins.block) else { return Bounds2::from_points([ins.insert.xy()]) };
             let m = ins.transform(blk.base.xy());
-            let mut inner = Bounds2::EMPTY;
-            for be in blk.entities.iter() {
-                inner = inner.union(&entity_bounds(d, be, depth + 1));
-            }
+            let inner = block_inner(d, &ins.block, depth, cache).unwrap_or(Bounds2::EMPTY);
             let mut b =
                 if inner.is_empty() { Bounds2::from_points([ins.insert.xy()]) } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
             if ins.cols > 1 || ins.rows > 1 {
@@ -83,12 +108,11 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
             // Room for text and arrows.
             let th = d.dim_style(&dm.style).map(|s| s.text_height * s.scale.max(1e-9)).unwrap_or(0.18) * d.header.f64("DIMSCALE", 1.0).max(1e-9);
             b = b.expand(th * 2.5);
-            if let Some(blk) = dm.block.as_ref().and_then(|n| d.block(n))
+            if let Some(n) = dm.block.as_ref()
                 && depth < MAX_BLOCK_DEPTH
+                && let Some(inner) = block_inner(d, n, depth, cache)
             {
-                for be in blk.entities.iter() {
-                    b = b.union(&entity_bounds(d, be, depth + 1));
-                }
+                b = b.union(&inner);
             }
             b
         }
@@ -99,7 +123,7 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
                 // VNCCad: the whole text box, so a click on the text finds the multileader.
                 if depth < MAX_BLOCK_DEPTH {
                     let te = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::MText(t.clone()) };
-                    let tb = entity_bounds(d, &te, depth + 1);
+                    let tb = entity_bounds_with(d, &te, depth + 1, cache);
                     if !tb.is_empty() {
                         b = b.union(&tb);
                     }

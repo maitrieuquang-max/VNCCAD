@@ -133,8 +133,21 @@ impl Spline {
         (0..=n).map(|i| self.eval(lo + (hi - lo) * i as f64 / n as f64)).collect()
     }
 
+    /// Bounds of the curve: its control points (a B-spline with positive weights lies inside the
+    /// hull of its control points), or samples when the spline is invalid or has no positive
+    /// weights. VNCCad: sampling at a fixed 0.001 made 40,000 splines in the blocks of a drawing
+    /// in millimetres take seconds to measure for zoom, picking and viewports.
     pub fn bounds(&self) -> Bounds2 {
-        Bounds2::from_points(self.tessellate(1e-3))
+        let positive = self.weights.iter().all(|w| w.is_finite() && *w > 0.0);
+        if self.is_valid() && positive && !self.control.is_empty() {
+            return Bounds2::from_points(self.control.iter().copied());
+        }
+        let hull = Bounds2::from_points(self.control.iter().copied());
+        let size = hull.width().max(hull.height());
+        if hull.is_empty() || !size.is_finite() || size <= 0.0 {
+            return hull;
+        }
+        Bounds2::from_points(self.tessellate(size / 500.0))
     }
 }
 

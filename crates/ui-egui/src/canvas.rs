@@ -140,6 +140,9 @@ pub struct CanvasState {
     pub snap_menu: Option<Pos2>,
     /// VNCCad: input time of the current frame (seconds).
     pub now: f64,
+    /// VNCCad: the last primary press (time, position) and when a double-click last fired.
+    last_press: Option<(f64, Pos2)>,
+    dbl_at: f64,
 }
 
 fn color32(c: Rgb) -> Color32 {
@@ -599,6 +602,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         )
     });
     let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    // VNCCad: our own double-click: a second press within 0.5 s, close by. egui measures the gap
+    // between the frames that handle the clicks, so on a heavy drawing (a frame can take a few
+    // hundred milliseconds) a real double-click was often missed — entering a viewport or
+    // editing a text then "did nothing".
+    let dbl_primary = {
+        let now = ui.input(|i| i.time);
+        let mut ours = false;
+        if pressed_primary && let Some(hp) = hover_pos {
+            ours = app.canvas.last_press.is_some_and(|(t, p)| now - t <= 0.5 && p.distance(hp) <= 6.0);
+            app.canvas.last_press = if ours { None } else { Some((now, hp)) };
+            if ours {
+                app.canvas.dbl_at = now;
+            }
+        }
+        // egui's own double-click arrives at the release: skip it when ours already fired.
+        ours || (dbl_primary && now - app.canvas.dbl_at > 0.6)
+    };
     // Zoom with the wheel about the cursor.
     if inside
         && scroll.abs() > 0.0
@@ -667,6 +687,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let in_active = active_vp.as_ref().is_some_and(|v| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0);
         if !in_active {
             app.canvas.hot_grip = None;
+            // The first click of the double-click started a selection window: drop it.
+            app.session.pending_window = None;
+            app.session.set_selection(Vec::new());
             if app.run("mspace", serde_json::json!({"at": [pp.x, pp.y]})).is_err() && active_vp.is_some() {
                 let _ = app.run("pspace", serde_json::json!({}));
             }

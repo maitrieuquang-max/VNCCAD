@@ -11,6 +11,9 @@ use cadcraft_geom::{Bounds2, Polyline, Vec2};
 /// returned so the caller can fill the area instead, the way such a hatch looks anyway. Dash
 /// patterns shorter than `tol` are drawn as continuous lines. Zoomed out on a large drawing,
 /// this turns millions of invisible segments into one fill.
+/// Most line pieces one pattern family may produce.
+const HATCH_BUDGET: usize = 150_000;
+
 pub fn pattern_lines_lod(h: &Hatch, tol: f64) -> (Vec<Vec<Vec2>>, bool) {
     let mut dense = false;
     let pat = pattern(&h.pattern).unwrap_or_else(|| pattern("ANSI31").unwrap_or(HatchPattern { name: "ANSI31", description: "", lines: vec![] }));
@@ -32,6 +35,25 @@ pub fn pattern_lines_lod(h: &Hatch, tol: f64) -> (Vec<Vec<Vec2>>, bool) {
         let mut dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
         if tol > 0.0 && dashes.iter().map(|d| d.abs()).sum::<f64>() < tol {
             dashes.clear();
+        }
+        // VNCCad: a budget per family. A fine pattern (GRASS, AR-CONC) at a small scale over a
+        // large area made millions of dashes — seconds of work and gigabytes of memory for a
+        // texture no screen can show. Over budget, the dashes become continuous lines; with
+        // too many lines even then, the area is filled like any too-dense hatch.
+        let area = Bounds2::from_points(loops.iter().flatten().copied());
+        if !area.is_empty() {
+            let rows = (area.width().max(area.height()) * std::f64::consts::SQRT_2 / spacing).ceil();
+            let pat_len: f64 = dashes.iter().map(|d| d.abs()).sum();
+            let reach = area.width().hypot(area.height());
+            let pieces = if dashes.is_empty() || pat_len < 1e-12 { rows } else { rows * (reach / pat_len).ceil() * dashes.len() as f64 };
+            if pieces > HATCH_BUDGET as f64 {
+                if rows <= HATCH_BUDGET as f64 / 4.0 {
+                    dashes.clear();
+                } else {
+                    dense = true;
+                    continue;
+                }
+            }
         }
         family(&loops, origin, ang, delta, spacing, &dashes, &mut out);
         if out.len() > 500_000 {

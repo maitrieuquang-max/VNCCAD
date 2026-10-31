@@ -25,7 +25,7 @@ pub use cadcraft_geom as geom;
 pub use constraint::*;
 pub use dynblock::*;
 pub use entity::*;
-pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use extents::{BoundsCache, MAX_BLOCK_DEPTH, entity_bounds, entity_bounds_with};
 pub use header::{HVal, Header};
 pub use mline::*;
 pub use store::EntityStore;
@@ -263,10 +263,11 @@ impl Drawing {
     /// Bounds of all visible entities in a space.
     pub fn extents(&self, space: &Space) -> cadcraft_geom::Bounds2 {
         let mut b = cadcraft_geom::Bounds2::EMPTY;
+        let mut cache = extents::BoundsCache::default();
         if let Some(store) = self.space(space) {
             for e in store.iter() {
                 if self.is_visible(e) {
-                    b = b.union(&entity_bounds(self, e, 0));
+                    b = b.union(&extents::entity_bounds_with(self, e, 0, &mut cache));
                 }
             }
         }

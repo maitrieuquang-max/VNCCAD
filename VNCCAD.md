@@ -231,6 +231,13 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **Layout có sẵn hiện ngay nội dung:** layout đọc từ file mở đúng khung nhìn đã lưu trong AutoCAD (khung nhìn tổng id 1 của layout), không còn mở ra tờ giấy trắng ở gốc tọa độ trong khi khung tên nằm ở tọa độ xa (trường hợp hay gặp với bản vẽ hạ tầng tọa độ VN2000) — trước đây trông như layout không được đọc.
 - **Mở bản vẽ đúng vùng đã lưu:** Model mở tại khung nhìn lúc lưu file (*ACTIVE) thay vì Zoom Extents — bản vẽ có vài đối tượng lạc ở gốc 0,0 hoặc ở hệ tọa độ khác không còn bị thu nhỏ thành chấm.
 
+## Đợt sửa 4b – khung nhìn (MView) trong Layout, tốc độ
+
+- **Vào khung nhìn để bố trí in:** kích đúp vào trong khung → làm việc trong khung (MODEL trên thanh trạng thái); kéo chuột giữa / lăn chuột để di chuyển, phóng to nội dung; kích đúp ra ngoài khung để về tờ giấy. Nhận kích đúp chắc chắn cả với bản vẽ nặng (trước đây hay trượt nên tưởng "không vào được").
+- **Khung bị khóa (Display locked):** khi vào khung đang khóa, dòng lệnh báo rõ; mở khóa bằng `VPLOCK` (`KHOAVP`) → OFF, hoặc Properties → Display locked.
+- **Bảng thông số khung nhìn trong Properties:** chọn đường viền khung, hoặc đang ở trong khung: Display locked, Standard scale (1:1 … 1:10000), Custom scale (gõ `1:750`), View center X/Y, Center X/Y, Width, Height, Clipped. Lệnh `VPSCALE` (`TILEVP`): gõ tỉ lệ cho khung đang làm việc.
+- **Nhanh hơn nhiều với bản vẽ lớn:** dựng layout có 2 khung nhìn từ 11,7 s xuống 0,3 s; đo phạm vi bản vẽ (Zoom, chọn, mở file) từ 6 s xuống 0,08 s. Nguyên nhân: spline trong block được lấy mẫu quá dày khi đo phạm vi, và hatch hoa văn mịn (GRASS, AR-CONC) tỉ lệ nhỏ trong Paper tạo hàng triệu nét — nay giới hạn mức chi tiết như AutoCAD.
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

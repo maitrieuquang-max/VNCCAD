@@ -601,6 +601,22 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             });
         }
+        // VNCCad: working inside a viewport (MSPACE): its scale, lock and view here too.
+        let active = app.session.state().ok().and_then(|st| st.active_viewport());
+        if let Some((vh, v)) = active {
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+            ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
+            ui.painter().text(
+                pos2(r.left() + 12.0, r.center().y),
+                egui::Align2::LEFT_CENTER,
+                "Khung nhìn đang làm việc",
+                crate::theme::small(),
+                t.text_dim,
+            );
+            if let Some(p) = viewport_rows(ui, vh, &v) {
+                action = Some(("vpprops", p));
+            }
+        }
         if let Some((c, p)) = action {
             let _ = app.run(c, p);
         }
@@ -626,6 +642,7 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<Value> = None;
     let mut dyn_set: Option<(String, String, Value)> = None;
+    let mut vp_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -775,6 +792,9 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     }
                 }
             }
+            EntityKind::Viewport(v) => {
+                vp_set = viewport_rows(ui, e.handle, v);
+            }
             EntityKind::Arc(a) => {
                 num(ui, "Radius", "radius", a.radius, &mut set, &ids);
                 num(ui, "Start angle", "startAngle", a.start.to_degrees(), &mut set, &ids);
@@ -907,7 +927,68 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
     }
+    if let Some(p) = vp_set {
+        let _ = app.run("vpprops", p);
+    }
     if let Some((h, name, value)) = dyn_set {
         let _ = app.run("dynprop", json!({ "handle": h, "name": name, "value": value }));
     }
+}
+
+/// VNCCad: the Viewport rows of the Properties palette (a selected viewport, or the one being
+/// worked in after a double-click). Returns parameters for `viewport.set`.
+fn viewport_rows(ui: &mut egui::Ui, h: cadcraft_doc::Handle, v: &cadcraft_doc::Viewport) -> Option<Value> {
+    let ids = vec![h.hex()];
+    let mut out: Option<Value> = None;
+    let k = v.view_height / v.height.max(1e-12);
+    let scale_txt = {
+        let r = (k * 1e4).round() / 1e4;
+        if (r - r.round()).abs() < 1e-9 { format!("1:{}", r.round() as i64) } else { format!("1:{r}") }
+    };
+    prop_row(ui, "Display locked", |ui| {
+        let mut on = v.locked;
+        let label = if on { "Yes" } else { "No" };
+        if ui.checkbox(&mut on, label).changed() {
+            out = Some(json!({ "handles": ids, "locked": on }));
+        }
+    });
+    prop_row(ui, "Standard scale", |ui| {
+        ui.menu_button(scale_txt.clone(), |ui| {
+            for n in [1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0, 2000.0, 2500.0, 5000.0, 10000.0] {
+                if ui.button(format!("1:{n}")).clicked() {
+                    out = Some(json!({ "handles": ids, "scale": n }));
+                    ui.close();
+                }
+            }
+        });
+    });
+    prop_row(ui, "Custom scale", |ui| {
+        if let Some(t) = edit_field(ui, ui.id().with(("vpscale", h.0)), scale_txt.clone()) {
+            out = Some(json!({ "handles": ids, "scale": t }));
+        }
+    });
+    let mut num = |ui: &mut egui::Ui, label: &str, key: &str, val: f64, make: &dyn Fn(f64) -> Value| {
+        prop_row(ui, label, |ui| {
+            if let Some(t) = edit_field(ui, ui.id().with((key, h.0)), format!("{val:.4}"))
+                && let Ok(f) = t.trim().replace(',', ".").parse::<f64>()
+            {
+                let mut p = make(f);
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("handles".into(), json!(ids));
+                }
+                out = Some(p);
+            }
+        });
+    };
+    let (vc, c) = (v.view_center, v.center);
+    num(ui, "View center X", "vcx", vc.x, &|f| json!({ "viewCenter": [f, vc.y] }));
+    num(ui, "View center Y", "vcy", vc.y, &|f| json!({ "viewCenter": [vc.x, f] }));
+    num(ui, "Center X", "vpcx", c.x, &|f| json!({ "center": [f, c.y] }));
+    num(ui, "Center Y", "vpcy", c.y, &|f| json!({ "center": [c.x, f] }));
+    num(ui, "Width", "vpw", v.width, &|f| json!({ "width": f }));
+    num(ui, "Height", "vph", v.height, &|f| json!({ "height": f }));
+    prop_row(ui, "Clipped", |ui| {
+        value_box(ui, if v.clip.is_some() { "Yes" } else { "No" }, false, true);
+    });
+    out
 }

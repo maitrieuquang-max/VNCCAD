@@ -254,11 +254,17 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     if let Some(store) = d.space(space) {
         let paper = matches!(space, Space::Paper(_));
         let mut viewports = 0usize;
+        // VNCCad: model bounds measured once for every viewport of the layout.
+        let mut model_bounds: Option<Vec<Bounds2>> = None;
         for e in store.iter() {
             if paper && let EntityKind::Viewport(vp) = &e.kind {
                 if viewports < MAX_VIEWPORTS {
                     viewports += 1;
-                    viewport(&mut b, d, e, vp);
+                    let mb = model_bounds.get_or_insert_with(|| {
+                        let mut cache = cadcraft_doc::BoundsCache::default();
+                        d.model.iter().map(|me| cadcraft_doc::entity_bounds_with(d, me, 0, &mut cache)).collect()
+                    });
+                    viewport(&mut b, d, e, vp, mb);
                 }
                 continue;
             }
@@ -274,7 +280,7 @@ const MAX_VIEWPORTS: usize = 256;
 
 /// A paper-space viewport: its border (as an ordinary entity) and model space seen through it.
 /// Viewport id 1 is the paper-space view itself and is not drawn.
-fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
+fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport, model_bounds: &[Bounds2]) {
     if vp.id == 1 || !e.common.visible {
         return;
     }
@@ -297,9 +303,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     // Annotative objects seen through a viewport take the viewport's scale.
     let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, anno: 1.0 / s, masks: Vec::new() };
-    for me in d.model.iter() {
+    for (i, me) in d.model.iter().enumerate() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
-            let eb = cadcraft_doc::entity_bounds(d, me, 0);
+            let eb = model_bounds.get(i).copied().unwrap_or_else(|| cadcraft_doc::entity_bounds(d, me, 0));
             if !eb.is_empty() && !eb.intersects(&win) {
                 continue;
             }

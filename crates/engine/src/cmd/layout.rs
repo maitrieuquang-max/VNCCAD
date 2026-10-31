@@ -134,6 +134,10 @@ fn run_mspace(s: &mut Session, p: &Value) -> Result<Value> {
     st.mspace = Some(pick);
     st.selection.clear();
     s.echo("MSPACE");
+    // VNCCad: a locked viewport keeps its view; say so, as people expect to pan its contents.
+    if vps.iter().any(|(h, v)| *h == pick && v.locked) {
+        s.echo("Khung nhìn đang KHÓA (Display locked): kéo/zoom sẽ di chuyển cả tờ giấy. Mở khóa: VPLOCK hoặc Properties → Display locked = No.");
+    }
     Ok(json!({ "viewport": pick.hex() }))
 }
 

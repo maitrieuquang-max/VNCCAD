@@ -433,3 +433,47 @@ fn layout_opens_on_its_contents_and_saved_model_view() {
     let v = s.state().unwrap().view();
     assert!((v.center.x - 3_335_000.0).abs() < 1.0, "{v:?}");
 }
+
+/// Đợt 4 (#9): viewport properties — lock, scale, view centre; VPLOCK / VPSCALE work on the
+/// viewport being worked in.
+#[test]
+fn viewport_properties_lock_and_scale() {
+    let mut s = Session::new();
+    s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+    s.execute("mview", &json!({"p1": [1, 1], "p2": [9, 6]})).unwrap();
+    let vp = s
+        .doc()
+        .unwrap()
+        .space(&cadcraft_doc::Space::Paper("Layout1".into()))
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(&e.kind, EntityKind::Viewport(v) if v.id != 1))
+        .last()
+        .map(|e| e.handle)
+        .unwrap();
+    let get = |s: &Session| match &s.doc().unwrap().entity(vp).unwrap().kind {
+        EntityKind::Viewport(v) => v.clone(),
+        _ => panic!(),
+    };
+    s.execute("vpprops", &json!({"handles": [vp.hex()], "scale": "1:500", "viewCenter": [100, 200]})).unwrap();
+    let v = get(&s);
+    assert!((v.view_height / v.height - 500.0).abs() < 1e-9 && v.view_center == Vec2::new(100.0, 200.0), "{v:?} {:?}", s.log);
+    s.execute("mspace", &json!({"handle": vp.hex()})).unwrap();
+    s.cmdline("vplock").unwrap();
+    s.cmdline("ON").unwrap();
+    assert!(get(&s).locked);
+    s.cmdline("vpscale").unwrap();
+    s.cmdline("1:100").unwrap();
+    let v = get(&s);
+    assert!((v.view_height / v.height - 100.0).abs() < 1e-9, "{}", v.view_height / v.height);
+    assert_eq!(crate::cmd::round3::parse_vp_scale(&json!("1/250")), Some(250.0));
+    assert_eq!(crate::cmd::round3::parse_vp_scale(&json!("abc")), None);
+}
+
+/// Every command id is unique (a duplicate silently hides the later one).
+#[test]
+fn command_ids_are_unique() {
+    let mut seen = std::collections::HashSet::new();
+    let dups: Vec<&str> = crate::cmd::command_specs().iter().map(|c| c.id).filter(|id| !seen.insert(*id)).collect();
+    assert!(dups.is_empty(), "duplicate command ids: {dups:?}");
+}
