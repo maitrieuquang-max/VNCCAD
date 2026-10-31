@@ -477,3 +477,60 @@ fn command_ids_are_unique() {
     let dups: Vec<&str> = crate::cmd::command_specs().iter().map(|c| c.id).filter(|id| !seen.insert(*id)).collect();
     assert!(dups.is_empty(), "duplicate command ids: {dups:?}");
 }
+
+/// Đợt 5 (#15): PURGE lists purgeable items by category and purges only those chosen; nested
+/// purging follows blocks only an unused block referenced.
+#[test]
+fn purge_list_selective_and_nested() {
+    let mut s = Session::new();
+    s.execute("layer", &json!({"name": "UNUSED_L"})).unwrap_or_default();
+    s.execute("layer", &json!({"op": "new", "name": "UNUSED_L"})).unwrap_or_default();
+    s.execute("style", &json!({"name": "TS_UNUSED", "font": "Arial", "current": false})).unwrap();
+    s.execute("dimstyle", &json!({"name": "DS_UNUSED", "copyFrom": "Standard", "current": false})).unwrap();
+    // Block INNER used only by block OUTER, which nothing uses.
+    s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+    let c = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("block", &json!({"name": "INNER", "base": [0, 0], "handles": [c], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "INNER", "at": [0, 0]})).unwrap();
+    let i = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("block", &json!({"name": "OUTER", "base": [0, 0], "handles": [i], "keep": "delete"})).unwrap();
+    let list = s.execute("purge", &json!({"list": true})).unwrap();
+    let names = |k: &str, l: &serde_json::Value| l[k].as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert!(names("textStyles", &list).contains(&"TS_UNUSED".to_string()), "{list}");
+    assert!(names("dimStyles", &list).contains(&"DS_UNUSED".to_string()), "{list}");
+    assert!(names("blocks", &list).contains(&"OUTER".to_string()) && !names("blocks", &list).contains(&"INNER".to_string()), "{list}");
+    // Only the text style.
+    s.execute("purge", &json!({"items": {"textStyles": ["TS_UNUSED"]}})).unwrap();
+    let list = s.execute("purge", &json!({"list": true})).unwrap();
+    assert!(!names("textStyles", &list).contains(&"TS_UNUSED".to_string()));
+    assert!(names("dimStyles", &list).contains(&"DS_UNUSED".to_string()));
+    // Nested: OUTER then INNER.
+    s.execute("purge", &json!({"items": {"blocks": ["OUTER"]}, "nested": true})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.block("OUTER").is_none() && d.block("INNER").is_none());
+}
+
+/// Đợt 5 (#16): hatch area with an island taken out.
+#[test]
+fn hatch_area_with_island() {
+    let sq = |a: f64, b: f64| -> cadcraft_doc::HatchLoop {
+        let vs: Vec<serde_json::Value> = [[a, a], [b, a], [b, b], [a, b]]
+            .iter()
+            .map(|p| json!({"p": {"x": p[0], "y": p[1]}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0}))
+            .collect();
+        serde_json::from_value(json!({"vertices": vs, "outer": false})).unwrap()
+    };
+    let mut s = Session::new();
+    s.execute("rectang", &json!({"p1": [0, 0], "p2": [10, 10]})).unwrap();
+    s.start("hatch").unwrap();
+    s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    let EntityKind::Hatch(mut h) = s.doc().unwrap().model.iter().find(|e| matches!(e.kind, EntityKind::Hatch(_))).unwrap().kind.clone() else {
+        panic!()
+    };
+    let (a, p) = crate::cmd::round3::hatch_area(&h);
+    assert!((a - 100.0).abs() < 1e-6 && (p - 40.0).abs() < 1e-6, "{a} {p}");
+    h.loops = vec![sq(0.0, 10.0), sq(2.0, 4.0)];
+    let (a, _) = crate::cmd::round3::hatch_area(&h);
+    assert!((a - 96.0).abs() < 1e-6, "{a}");
+}

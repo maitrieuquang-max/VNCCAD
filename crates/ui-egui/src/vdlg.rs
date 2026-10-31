@@ -23,6 +23,12 @@ pub struct VState {
     pub xref: bool,
     /// VNCCad: Multileader Style manager.
     pub mls: Option<MlsDlg>,
+    /// VNCCad: PURGE and OPTIONS dialogs.
+    pub purge: Option<crate::opts::PurgeDlg>,
+    pub options: Option<crate::opts::OptionsDlg>,
+    /// VNCCad: the DWG version chosen in OPTIONS for saving, and the drawings it was applied to.
+    pub dwg_default: Option<String>,
+    dwg_applied: std::collections::HashSet<u64>,
     aliases_loaded: bool,
 }
 
@@ -48,6 +54,8 @@ pub fn route(app: &mut CadApp, id: &str) -> Option<Result<Value, String>> {
         }
         "xref" if has_doc => app.vd.xref = true,
         "mleaderstyle" if has_doc => app.vd.mls = Some(MlsDlg::load(app, None)),
+        "purge" if has_doc => app.vd.purge = Some(crate::opts::PurgeDlg::load(app)),
+        "options" => app.vd.options = Some(crate::opts::OptionsDlg::load(app)),
         _ => return None,
     }
     Some(Ok(Value::Null))
@@ -77,6 +85,13 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     if !app.vd.aliases_loaded {
         app.vd.aliases_loaded = true;
         load_aliases(app);
+        crate::opts::load_saved(app);
+    }
+    // VNCCad: the DWG version chosen in OPTIONS applies to every drawing, once.
+    if let (Some(y), Ok(st)) = (app.vd.dwg_default.clone(), app.session.state())
+        && app.vd.dwg_applied.insert(st.uid)
+    {
+        let _ = app.session.execute("dwgversion", &json!({ "version": y }));
     }
     if let Some(h) = ctx.data_mut(|m| m.remove_temp::<Handle>(egui::Id::new("vnc_open_edit"))) {
         open_edit(app, h);
@@ -90,6 +105,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     alias_dialog(app, ctx);
     xref_dialog(app, ctx);
     mls_dialog(app, ctx);
+    crate::opts::purge_dialog(app, ctx);
+    crate::opts::options_dialog(app, ctx);
 }
 
 fn run_echo(app: &mut CadApp, id: &str, p: Value) -> bool {

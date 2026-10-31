@@ -238,6 +238,13 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **Bảng thông số khung nhìn trong Properties:** chọn đường viền khung, hoặc đang ở trong khung: Display locked, Standard scale (1:1 … 1:10000), Custom scale (gõ `1:750`), View center X/Y, Center X/Y, Width, Height, Clipped. Lệnh `VPSCALE` (`TILEVP`): gõ tỉ lệ cho khung đang làm việc.
 - **Nhanh hơn nhiều với bản vẽ lớn:** dựng layout có 2 khung nhìn từ 11,7 s xuống 0,3 s; đo phạm vi bản vẽ (Zoom, chọn, mở file) từ 6 s xuống 0,08 s. Nguyên nhân: spline trong block được lấy mẫu quá dày khi đo phạm vi, và hatch hoa văn mịn (GRASS, AR-CONC) tỉ lệ nhỏ trong Paper tạo hàng triệu nét — nay giới hạn mức chi tiết như AutoCAD.
 
+## Đợt sửa 5 – PURGE, OPTIONS, Properties, Tool Sets
+
+- **PURGE (`PU`) có hộp thoại:** liệt kê theo nhóm (Block, Layer, Linetype, Text style, Dim style, Multileader style) các mục không dùng, có ô đánh dấu từng mục, Lọc theo tên, "Xóa mục đã chọn", "Xóa tất cả", tùy chọn "Xóa cả mục lồng nhau" (block chỉ được một block không dùng tham chiếu, rồi layer/kiểu của nó). Như AutoCAD: block được định nghĩa khác tham chiếu, layer dùng trong block, kiểu hiện hành, layer 0/Defpoints, mục của xref không bị xóa. `-PURGE` / gọi lệnh kèm tham số vẫn xóa hết như trước.
+- **OPTIONS (`OP`):** hộp thoại Tùy chọn — Hiển thị (cỡ con trỏ, độ dày nét, thanh công cụ/trạng thái, thẻ bản vẽ, ViewCube, biểu tượng UCS, số dòng lịch sử), Mở & Lưu (chu kỳ tự lưu, phiên bản DWG khi lưu), Vẽ (ô bắt điểm, OTRACK, nhập động, góc cực, mở DSETTINGS), Chọn (PICKBOX, cỡ grip, PICKFIRST, PICKADD, QPMODE), Người dùng (ALIASEDIT, UNITS). OK/Áp dụng/Mặc định; được lưu lại cho lần mở sau.
+- **Properties:** Hatch có **Area** (trừ đảo bên trong) và **Perimeter**; Polyline hở cũng có Area (tính như khép kín, giống AutoCAD).
+- **Tool Sets (bảng công cụ bên trái):** thêm nhóm **Layers** (LA, đặt layer hiện hành theo đối tượng, Match, Previous, Off/On, Isolate/Unisolate, Freeze/Thaw, Lock/Unlock, chuyển sang layer hiện hành), mở rộng **Dimension** (Jogged, Dim Break, Adjust Space, dời chữ kích thước, Center Mark, DIMSTYLE, MLEADERSTYLE, STYLE) và nhóm **Utilities** (DI, AA, LI, Measure, PURGE, OPTIONS).
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:

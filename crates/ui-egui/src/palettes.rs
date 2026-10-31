@@ -75,6 +75,24 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
         &[(Icon::Text, "text", "Single Line Text"), (Icon::MText, "mtext", "Multiline Text")],
         &[(Icon::Table, "table", "Table"), (Icon::Search, "find", "Find and Replace")],
     ),
+    // VNCCad: layer tools on the tool sets (layer manager, make current, off/isolate/freeze/lock…).
+    (
+        "Layers",
+        &[(Icon::LayerProps, "layer", "Layer Properties (LA)"), (Icon::MakeCurrent, "laymcur", "Make Object's Layer Current")],
+        &[
+            (Icon::LayerMatch, "laymch", "Match Layer"),
+            (Icon::LayerPrev, "layerp", "Previous Layer"),
+            (Icon::LayerOff, "layoff", "Layer Off"),
+            (Icon::Bulb, "layon", "Turn All Layers On"),
+            (Icon::LayerIso, "layiso", "Isolate Layer"),
+            (Icon::BulbOff, "layuniso", "Unisolate Layer"),
+            (Icon::LayerFreeze, "layfrz", "Freeze Layer"),
+            (Icon::Sun, "laythw", "Thaw All Layers"),
+            (Icon::LayerLock, "laylck", "Lock Layer"),
+            (Icon::Unlock, "layulk", "Unlock Layer"),
+            (Icon::MakeCurrent, "laycur", "Change to Current Layer"),
+        ],
+    ),
     (
         "Dimension",
         &[(Icon::DimLinear, "dimlinear", "Linear"), (Icon::DimAligned, "dimaligned", "Aligned")],
@@ -87,6 +105,24 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
             (Icon::DimBaseline, "dimbaseline", "Baseline"),
             (Icon::DimContinue, "dimcontinue", "Continue"),
             (Icon::QDim, "qdim", "Quick Dimension"),
+            (Icon::DimRadius, "dimjogged", "Jogged (curves)"),
+            (Icon::Break, "dimbreak", "Dimension Break"),
+            (Icon::DimBaseline, "dimspace", "Adjust Space"),
+            (Icon::Move, "dimtedit", "Move Dimension Text"),
+            (Icon::Circle, "centermark", "Center Mark"),
+            (Icon::Gear, "dimstyle", "Dimension Style (D)"),
+            (Icon::Gear, "mleaderstyle", "Multileader Style (MLS)"),
+            (Icon::Text, "style", "Text Style (ST)"),
+        ],
+    ),
+    (
+        "Utilities",
+        &[(Icon::Distance, "dist", "Distance (DI)"), (Icon::Area, "area", "Area (AA)")],
+        &[
+            (Icon::List, "list", "List (LI)"),
+            (Icon::Measure, "measuregeom", "Measure"),
+            (Icon::Erase, "purge", "Purge (PU)"),
+            (Icon::Gear, "options", "Options (OP)"),
         ],
     ),
     (
@@ -841,11 +877,11 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Length", |ui| {
                     value_box(ui, &format!("{:.4}", g.len()), false, true);
                 });
-                if pl.closed {
-                    prop_row(ui, "Area", |ui| {
-                        value_box(ui, &format!("{:.4}", g.area().abs()), false, true);
-                    });
-                }
+                // VNCCad: area of open polylines too (as if closed), like AutoCAD.
+                let area = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: true }.area().abs();
+                prop_row(ui, "Area", |ui| {
+                    value_box(ui, &format!("{area:.4}"), false, true);
+                });
                 prop_row(ui, "Closed", |ui| {
                     let mut c = pl.closed;
                     let label = if c { "Yes" } else { "No" };
@@ -867,6 +903,14 @@ fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
                 num(ui, "Scale", "scale", hh.scale, &mut set, &ids);
                 num(ui, "Angle", "angle", hh.angle.to_degrees(), &mut set, &ids);
+                // VNCCad: hatch area (islands subtracted) and boundary length.
+                let (area, perim) = cadcraft_engine::cmd::round3::hatch_area(hh);
+                prop_row(ui, "Area", |ui| {
+                    value_box(ui, &format!("{area:.4}"), false, true);
+                });
+                prop_row(ui, "Perimeter", |ui| {
+                    value_box(ui, &format!("{perim:.4}"), false, true);
+                });
             }
             EntityKind::Dimension(dm) => {
                 prop_row(ui, "Text override", |ui| {

@@ -22,6 +22,7 @@ pub mod icons;
 pub mod inplace;
 pub mod layers;
 pub mod menus;
+pub mod opts;
 pub mod otrack;
 pub mod palettes;
 pub mod parametric;

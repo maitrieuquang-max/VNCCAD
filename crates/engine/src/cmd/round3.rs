@@ -15,6 +15,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("vpprops", "Viewport Properties (Properties palette)", run_vp_set)
             .params("{handles? (viewports; default the active one), locked?, scale? (\"1:500\" or model units per paper unit), viewCenter?: [x,y], center?: [x,y], width?, height?}")
             .enabled(has_doc),
+        CommandSpec::new("options", "Options...", run_options)
+            .menu(&["Tools", "Options..."])
+            .alias(&["op", "cauhinh", "preferences"])
+            .params("{} → the session settings (the Options dialog edits them; scripts use SETVAR)")
+            .noundo()
+            .enabled(always),
         CommandSpec::new("vplock", "Lock Viewport", run_vplock)
             .menu(&["View", "Viewports", "Lock / Unlock Viewport"])
             .alias(&["khoavp"])
@@ -305,4 +311,303 @@ fn flow_vpscale(s: &mut Session, a: &[Ans]) -> Result<Value> {
         _ => return Err(bad("vpscale", "thiếu tỉ lệ")),
     };
     run_vpscale(s, &json!({ "scale": t, "handles": hs }))
+}
+
+// ---------------------------------------------------------------- PURGE (VNCCad)
+
+/// Purge categories, as the PURGE dialog lists them.
+pub const PURGE_KINDS: [(&str, &str); 6] = [
+    ("blocks", "Block"),
+    ("layers", "Layer"),
+    ("linetypes", "Kiểu đường (Linetype)"),
+    ("textStyles", "Kiểu chữ (Text style)"),
+    ("dimStyles", "Kiểu kích thước (Dim style)"),
+    ("mleaderStyles", "Kiểu ghi chú dẫn (Multileader style)"),
+];
+
+/// Names that can be purged now, by category.
+pub fn purgeable(d: &cadcraft_doc::Drawing) -> Vec<(&'static str, Vec<String>)> {
+    use std::collections::HashSet;
+    let low = |s: &str| s.to_ascii_lowercase();
+    let all: Vec<&cadcraft_doc::Entity> =
+        d.model.iter().map(|e| &**e).chain(d.layouts.iter().flat_map(|l| l.entities.iter().map(|e| &**e))).collect();
+    // Blocks referenced from the drawing, followed through nested references.
+    let mut used_b: HashSet<String> = HashSet::new();
+    let mut frontier: Vec<String> = Vec::new();
+    let refs = |e: &cadcraft_doc::Entity, out: &mut Vec<String>| match &e.kind {
+        EntityKind::Insert(i) => out.push(i.block.clone()),
+        EntityKind::Dimension(dm) => out.extend(dm.block.clone()),
+        _ => {}
+    };
+    // As in AutoCAD, a block referenced from any block definition is in use (until that
+    // definition is purged: `nested`).
+    for e in all.iter().copied().chain(d.blocks.values().flat_map(|b| b.entities.iter().map(|e| &**e))) {
+        refs(e, &mut frontier);
+    }
+    // Dimension arrow blocks named in dimension styles.
+    for ds in &d.dim_styles {
+        let v = serde_json::to_value(ds).unwrap_or_default();
+        for k in ["arrowBlock", "arrowBlock1", "arrowBlock2", "leaderArrowBlock", "dimblk", "dimblk1", "dimblk2", "dimldrblk"] {
+            if let Some(n) = v.get(k).and_then(Value::as_str).filter(|n| !n.is_empty()) {
+                frontier.push(n.to_string());
+            }
+        }
+    }
+    let mut guard = 0;
+    while let Some(n) = frontier.pop() {
+        guard += 1;
+        if guard > 200_000 || !used_b.insert(low(&n)) {
+            continue;
+        }
+        if let Some(b) = d.block(&n) {
+            for e in b.entities.iter() {
+                refs(e, &mut frontier);
+            }
+        }
+    }
+    // Entities that count: the drawing's and those inside every block definition.
+    let live: Vec<&cadcraft_doc::Entity> = all.iter().copied().chain(d.blocks.values().flat_map(|b| b.entities.iter().map(|e| &**e))).collect();
+    let blocks: Vec<String> = d
+        .blocks
+        .values()
+        .filter(|b| !b.anonymous && !b.name.starts_with('*') && b.xref_path.is_none() && !used_b.contains(&low(&b.name)) && !b.name.contains('|'))
+        .map(|b| b.name.clone())
+        .collect();
+    let used_l: HashSet<String> = live.iter().map(|e| low(&e.common.layer)).collect();
+    let cur_l = low(&d.header.str("CLAYER", "0"));
+    let layers: Vec<String> = d
+        .layers
+        .iter()
+        .filter(|l| {
+            let n = low(&l.name);
+            n != "0" && n != "defpoints" && n != cur_l && !n.contains('|') && !used_l.contains(&n)
+        })
+        .map(|l| l.name.clone())
+        .collect();
+    let used_lt: HashSet<String> = live
+        .iter()
+        .map(|e| low(&e.common.linetype))
+        .chain(d.layers.iter().map(|l| low(&l.linetype)))
+        .chain(d.mline_styles.iter().flat_map(|m| m.elements.iter().map(|e| low(&e.linetype))))
+        .chain(std::iter::once(low(&d.header.str("CELTYPE", "ByLayer"))))
+        .collect();
+    let linetypes: Vec<String> = d
+        .linetypes
+        .iter()
+        .filter(|l| {
+            let n = low(&l.name);
+            !["byblock", "bylayer", "continuous"].contains(&n.as_str()) && !n.contains('|') && !used_lt.contains(&n)
+        })
+        .map(|l| l.name.clone())
+        .collect();
+    let mut used_ts: HashSet<String> = HashSet::new();
+    for e in &live {
+        match &e.kind {
+            EntityKind::Text(t) => drop(used_ts.insert(low(&t.style))),
+            EntityKind::MText(t) => drop(used_ts.insert(low(&t.style))),
+            EntityKind::AttDef(a) => drop(used_ts.insert(low(&a.text.style))),
+            EntityKind::Insert(i) => used_ts.extend(i.attribs.iter().map(|a| low(&a.text.style))),
+            EntityKind::MLeader(m) => used_ts.extend(m.text.iter().map(|t| low(&t.style))),
+            _ => {}
+        }
+    }
+    used_ts.extend(d.dim_styles.iter().map(|s| low(&s.text_style)));
+    used_ts.extend(d.mleader_styles.iter().map(|s| low(&s.text_style)));
+    used_ts.insert(low(&d.header.str("TEXTSTYLE", "Standard")));
+    let text_styles: Vec<String> = d
+        .text_styles
+        .iter()
+        .filter(|t| {
+            let n = low(&t.name);
+            n != "standard" && !n.contains('|') && !used_ts.contains(&n)
+        })
+        .map(|t| t.name.clone())
+        .collect();
+    let mut used_ds: HashSet<String> = HashSet::new();
+    for e in &live {
+        match &e.kind {
+            EntityKind::Dimension(dm) => drop(used_ds.insert(low(&dm.style))),
+            EntityKind::Leader(l) => drop(used_ds.insert(low(&l.style))),
+            EntityKind::Tolerance(t) => drop(used_ds.insert(low(&t.style))),
+            _ => {}
+        }
+    }
+    used_ds.insert(low(&d.header.str("DIMSTYLE", "Standard")));
+    let dim_styles: Vec<String> = d
+        .dim_styles
+        .iter()
+        .filter(|s| {
+            let n = low(&s.name);
+            n != "standard" && !n.contains('|') && !n.contains('$') && !used_ds.contains(&n)
+        })
+        .map(|s| s.name.clone())
+        .collect();
+    let mut used_ml: HashSet<String> =
+        live.iter().filter_map(|e| if let EntityKind::MLeader(m) = &e.kind { Some(low(&m.style)) } else { None }).collect();
+    used_ml.insert(low(&d.header.str("CMLEADERSTYLE", "Standard")));
+    let mleader_styles: Vec<String> = d
+        .mleader_styles
+        .iter()
+        .filter(|s| {
+            let n = low(&s.name);
+            n != "standard" && !used_ml.contains(&n)
+        })
+        .map(|s| s.name.clone())
+        .collect();
+    let mut out = vec![
+        ("blocks", blocks),
+        ("layers", layers),
+        ("linetypes", linetypes),
+        ("textStyles", text_styles),
+        ("dimStyles", dim_styles),
+        ("mleaderStyles", mleader_styles),
+    ];
+    for (_, v) in &mut out {
+        v.sort_by_key(|n| n.to_ascii_lowercase());
+    }
+    out
+}
+
+/// Remove the named items of one category (only those still purgeable). Returns how many.
+fn purge_names(d: &mut cadcraft_doc::Drawing, kind: &str, names: &[String]) -> usize {
+    let can: std::collections::HashSet<String> =
+        purgeable(d).into_iter().find(|(k, _)| *k == kind).map(|(_, v)| v.into_iter().map(|n| n.to_ascii_lowercase()).collect()).unwrap_or_default();
+    let want: std::collections::HashSet<String> = names.iter().map(|n| n.to_ascii_lowercase()).filter(|n| can.contains(n)).collect();
+    let hit = |n: &str| want.contains(&n.to_ascii_lowercase());
+    match kind {
+        "blocks" => {
+            let before = d.blocks.len();
+            d.blocks.retain(|k, _| !hit(k));
+            before - d.blocks.len()
+        }
+        "layers" => {
+            let before = d.layers.len();
+            d.layers.retain(|l| !hit(&l.name));
+            before - d.layers.len()
+        }
+        "linetypes" => {
+            let before = d.linetypes.len();
+            d.linetypes.retain(|l| !hit(&l.name));
+            before - d.linetypes.len()
+        }
+        "textStyles" => {
+            let before = d.text_styles.len();
+            d.text_styles.retain(|l| !hit(&l.name));
+            before - d.text_styles.len()
+        }
+        "dimStyles" => {
+            let before = d.dim_styles.len();
+            d.dim_styles.retain(|l| !hit(&l.name));
+            before - d.dim_styles.len()
+        }
+        "mleaderStyles" => {
+            let before = d.mleader_styles.len();
+            d.mleader_styles.retain(|l| !hit(&l.name));
+            before - d.mleader_styles.len()
+        }
+        _ => 0,
+    }
+}
+
+/// PURGE: `{list: true}` lists what can be purged; `{items: {category: [names]}}` purges those;
+/// `{}` (or `all: true`) purges everything purgeable. `nested: true` repeats until nothing is
+/// left (a block that only an unused block referenced, then its layers…).
+pub fn run_purge(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+        let d = s.doc()?;
+        let m: serde_json::Map<String, Value> = purgeable(d).into_iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+        return Ok(Value::Object(m));
+    }
+    let nested = p.get("nested").and_then(Value::as_bool).unwrap_or(false);
+    let items = p.get("items").and_then(Value::as_object).cloned();
+    let d = s.doc_mut()?;
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    // What could be purged before anything was: nested rounds take only what becomes purgeable
+    // because of this purge, never other unused items the user did not choose.
+    let initial: std::collections::HashSet<(String, String)> =
+        purgeable(d).into_iter().flat_map(|(k, v)| v.into_iter().map(move |n| (k.to_string(), n.to_ascii_lowercase()))).collect();
+    for round in 0..if nested { 50 } else { 1 } {
+        let mut n = 0;
+        for (kind, names) in purgeable(d) {
+            let chosen: Vec<String> = if round == 0 {
+                match &items {
+                    Some(m) => {
+                        let want: Vec<String> = m
+                            .get(kind)
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                            .unwrap_or_default();
+                        names.into_iter().filter(|x| want.iter().any(|w| w.eq_ignore_ascii_case(x))).collect()
+                    }
+                    None => names,
+                }
+            } else {
+                names.into_iter().filter(|x| !initial.contains(&(kind.to_string(), x.to_ascii_lowercase()))).collect()
+            };
+            if chosen.is_empty() {
+                continue;
+            }
+            let k = purge_names(d, kind, &chosen);
+            *counts.entry(kind).or_default() += k;
+            n += k;
+        }
+        if n == 0 {
+            break;
+        }
+    }
+    let total: usize = counts.values().sum();
+    let parts: Vec<String> = PURGE_KINDS.iter().filter_map(|(k, label)| counts.get(k).filter(|n| **n > 0).map(|n| format!("{n} {label}"))).collect();
+    let msg = if total == 0 {
+        "Không có gì để xóa (purge).".to_string()
+    } else {
+        format!("Đã xóa {total} mục không dùng: {}.", parts.join(", "))
+    };
+    let mut out = json!({ "total": total, "message": msg });
+    if let Some(o) = out.as_object_mut() {
+        for (k, n) in counts {
+            o.insert(k.to_string(), json!(n));
+        }
+        // Kept for scripts written against the old reply.
+        for k in ["blocks", "layers", "linetypes"] {
+            o.entry(k).or_insert(json!(0));
+        }
+    }
+    Ok(out)
+}
+
+fn run_options(s: &mut Session, _p: &Value) -> Result<Value> {
+    Ok(serde_json::to_value(&s.settings).unwrap_or(Value::Null))
+}
+
+/// VNCCad: a hatch's area with islands taken out (a loop inside an odd number of other loops is
+/// a hole), and the total length of its loops.
+pub fn hatch_area(h: &cadcraft_doc::Hatch) -> (f64, f64) {
+    let loops: Vec<cadcraft_geom::Polyline> =
+        h.loops.iter().take(100_000).map(|l| cadcraft_geom::Polyline { vertices: l.vertices.clone(), closed: true }).collect();
+    let pts: Vec<Vec<Vec2>> = loops.iter().map(|p| p.tessellate((p.len() * 1e-4).max(1e-9))).collect();
+    let inside = |p: Vec2, poly: &[Vec2]| {
+        let n = poly.len();
+        let mut c = false;
+        for i in 0..n {
+            let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % n)) else { continue };
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y) {
+                c = !c;
+            }
+        }
+        c
+    };
+    let mut area = 0.0;
+    let mut perim = 0.0;
+    for (i, l) in loops.iter().enumerate() {
+        let a = l.area().abs();
+        perim += l.len();
+        let probe = pts.get(i).and_then(|p| p.first().copied());
+        let depth = probe.map(|p| pts.iter().enumerate().filter(|(j, q)| *j != i && q.len() >= 3 && inside(p, q)).count()).unwrap_or(0);
+        if depth % 2 == 0 {
+            area += a;
+        } else {
+            area -= a;
+        }
+    }
+    (area.max(0.0), perim)
 }
