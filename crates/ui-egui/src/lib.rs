@@ -270,9 +270,12 @@ impl CadApp {
         let lower = name.to_ascii_lowercase();
         let font = [".ttf", ".ttc", ".otf"].iter().any(|e| lower.ends_with(e));
         let support = font
-            || [".lsp", ".fas", ".vlx", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".txt", ".csv", ".dat", ".xyz", ".tsv", ".vnss"]
-                .iter()
-                .any(|e| lower.ends_with(e));
+            || [
+                ".lsp", ".fas", ".vlx", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".txt", ".csv", ".dat", ".xyz", ".tsv", ".vnss", ".kml",
+                ".kmz",
+            ]
+            .iter()
+            .any(|e| lower.ends_with(e));
         if let Err(e) = self.run("open", json!({ "data": data, "name": name })) {
             self.set_status(e);
         } else if font {
@@ -294,7 +297,7 @@ impl CadApp {
             // Fonts, plot styles, LISP and scripts don't open a drawing: keep the view.
             let support = [
                 ".lsp", ".fas", ".vlx", ".dcl", ".sld", ".scr", ".shx", ".ctb", ".stb", ".ttf", ".ttc", ".otf", ".txt", ".csv", ".dat", ".xyz",
-                ".tsv", ".vnss",
+                ".tsv", ".vnss", ".kml", ".kmz",
             ]
             .iter()
             .any(|e| lower.ends_with(e));

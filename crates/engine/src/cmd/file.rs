@@ -74,6 +74,17 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
         s.echo(format!("Đã nạp world file {}. Ảnh cùng tên chèn sau sẽ đặt đúng tọa độ.", file_name(name)));
         return Ok(s.active);
     }
+    // VNCCad: Google Earth shapes go into the open drawing (in its GEOCRS coordinates).
+    if lower.ends_with(".kml") || lower.ends_with(".kmz") {
+        if s.docs.is_empty() {
+            return Err(bad("open", "mở (hoặc tạo) bản vẽ và đặt hệ tọa độ bằng GEOCRS trước, rồi kéo tệp KML/KMZ vào"));
+        }
+        let r = super::geo::import_bytes(s, bytes, &Value::Null)?;
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        return Ok(s.active);
+    }
     if lower.ends_with(".ctb") {
         let fname = file_name(name);
         cadcraft_io::raster::register(&fname, bytes.to_vec());

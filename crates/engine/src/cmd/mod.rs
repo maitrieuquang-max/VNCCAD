@@ -15,6 +15,7 @@ mod edit;
 pub mod fields;
 pub mod file;
 pub mod flow;
+pub mod geo;
 mod gripcmds;
 pub mod group;
 pub(crate) mod hatch;
@@ -210,6 +211,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(sheetset::specs());
         v.extend(quickfix::specs());
         v.extend(round3::specs());
+        v.extend(geo::specs());
         v
     })
 }

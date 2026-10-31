@@ -245,6 +245,16 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 - **Properties:** Hatch có **Area** (trừ đảo bên trong) và **Perimeter**; Polyline hở cũng có Area (tính như khép kín, giống AutoCAD).
 - **Tool Sets (bảng công cụ bên trái):** thêm nhóm **Layers** (LA, đặt layer hiện hành theo đối tượng, Match, Previous, Off/On, Isolate/Unisolate, Freeze/Thaw, Lock/Unlock, chuyển sang layer hiện hành), mở rộng **Dimension** (Jogged, Dim Break, Adjust Space, dời chữ kích thước, Center Mark, DIMSTYLE, MLEADERSTYLE, STYLE) và nhóm **Utilities** (DI, AA, LI, Measure, PURGE, OPTIONS).
 
+## Google Earth: xuất KMZ/KML, nhập KML/KMZ, hệ tọa độ VN-2000
+
+| Lệnh | Cách dùng |
+|---|---|
+| `GEOCRS` (`HETOADO`) | Đặt hệ tọa độ của bản vẽ, lưu trong file: `VN2000 Đà Nẵng` (tên tỉnh), `VN2000 107°45' 3`, `VN2000 105 6` (múi 6°), `UTM 48N`. Dòng lệnh báo tọa độ WGS-84 giữa bản vẽ để kiểm tra nhanh. Đơn vị bản vẽ (m hay mm) tự nhận theo độ lớn tọa độ. |
+| `EXPORTKMZ` (`XUATKMZ`, File > Export to Google Earth) | Xuất cả bản vẽ hoặc đối tượng chọn ra `.kmz` (web: tải về; desktop: hộp lưu). Mỗi layer là một thư mục trong Google Earth, giữ màu; line/polyline/cung/tròn/spline/block/kích thước → đường; hatch → vùng tô bán trong suốt (có lỗ); TEXT/MTEXT → nhãn. Google Earth mở đúng vùng chính của bản vẽ. Bản vẽ chưa có hệ tọa độ thì lệnh hỏi trước. `EXPORTKML`: tệp .kml không nén. |
+| `IMPORTKML` (`NHAPKML`, Insert > Google Earth KML / KMZ) hoặc kéo-thả `.kml/.kmz` | Đưa đường, vùng, điểm (kèm tên) vẽ trên Google Earth vào bản vẽ theo hệ tọa độ đã đặt; mỗi thư mục KML thành layer `KML-…`. |
+
+Chuyển đổi: VN-2000 (múi 3° k0 = 0,9999 / múi 6° k0 = 0,9996, kinh tuyến trục theo tỉnh – TT 973/2001) → WGS-84 bằng 7 tham số của Bộ TN&MT (QĐ 05/2007, EPSG 6960). Đã đối chiếu với PROJ 9: lệch dưới 2 cm. Kinh tuyến trục theo tên tỉnh cũ (trước sáp nhập 2025); tỉnh không có trong danh sách thì gõ trực tiếp kinh tuyến.
+
 ## Bản web trên GitHub Pages
 
 Mỗi lần push lên nhánh `main`, workflow tự build và cập nhật trang:
@@ -260,5 +270,5 @@ Sau khi mở trang lần đầu, Chrome/Edge sẽ hiện nút **Cài đặt** tr
 
 ## Lộ trình tiếp theo
 
-- **Giai đoạn 2:** VN2000/UTM, nhập/xuất KML, nền bản đồ vệ tinh, đường đồng mức (chuyển từ DXF Toolkit), giao diện tiếng Việt.
+- **Giai đoạn 2:** nền bản đồ vệ tinh, đường đồng mức (chuyển từ DXF Toolkit), giao diện tiếng Việt.
 - **Tiếp theo:** các tham số block động còn lại (Point, Polar, XY, Rotation, Lookup), ghi block động theo định dạng AutoCAD, sheet set.

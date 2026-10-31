@@ -534,3 +534,50 @@ fn hatch_area_with_island() {
     let (a, _) = crate::cmd::round3::hatch_area(&h);
     assert!((a - 96.0).abs() < 1e-6, "{a}");
 }
+
+/// KMZ: export with VN-2000 and import back lands on the same drawing coordinates.
+#[test]
+fn kmz_export_import_round_trip() {
+    let mut s = Session::new();
+    s.execute("geocrs", &json!({"crs": "VN2000 Đà Nẵng"})).unwrap();
+    s.execute("line", &json!({"points": [[535000.0, 1778000.0], [535100.0, 1778050.0]]})).unwrap();
+    s.execute("rectang", &json!({"p1": [535010.0, 1778010.0], "p2": [535030.0, 1778020.0]})).unwrap();
+    s.execute("hatch", &json!({"points": [[535020.0, 1778015.0]]})).unwrap_or_default();
+    s.execute("text", &json!({"at": [535050.0, 1778060.0], "text": "Nhà máy A", "height": 2.0})).unwrap();
+    let r = s.execute("exportkmz", &json!({})).unwrap();
+    let data = r["data"].as_str().unwrap().to_string();
+    let mut t = Session::new();
+    t.execute("geocrs", &json!({"crs": "VN2000 107.75 3"})).unwrap();
+    let r = t.execute("importkml", &json!({"data": data})).unwrap();
+    assert!(r["count"].as_u64().unwrap() >= 3, "{r}");
+    let d = t.doc().unwrap();
+    let near = |q: Vec2| {
+        d.model.iter().any(|e| match &e.kind {
+            EntityKind::LwPolyline(p) => p.vertices.iter().any(|v| v.p.dist(q) < 0.01),
+            EntityKind::Point(p) => p.p.xy().dist(q) < 0.01,
+            _ => false,
+        })
+    };
+    assert!(near(Vec2::new(535000.0, 1778000.0)) && near(Vec2::new(535100.0, 1778050.0)));
+    assert!(near(Vec2::new(535030.0, 1778020.0)));
+    assert!(d.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(x) if x.value == "Nhà máy A")));
+    assert!(d.layers.iter().any(|l| l.name.starts_with("KML-")));
+    // No coordinate system: a clear error, never a panic.
+    let mut u = Session::new();
+    assert!(u.execute("exportkmz", &json!({})).is_err());
+}
+
+/// EXPORTKMZ typed: asks the coordinate system when the drawing has none, then hands the file
+/// to the UI to save.
+#[test]
+fn exportkmz_interactive_asks_crs() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[535000.0, 1778000.0], [535100.0, 1778050.0]]})).unwrap();
+    s.cmdline("xuatkmz").unwrap();
+    assert!(s.current_prompt().unwrap().message.contains("hệ tọa độ") || s.current_prompt().unwrap().message.contains("Hệ tọa độ"));
+    s.cmdline("VN2000 Đà Nẵng").unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none(), "{:?}", s.log);
+    assert!(s.ui_requests.iter().any(|(id, p)| id == "ui.savebytes" && p["name"].as_str().is_some_and(|n| n.ends_with(".kmz"))));
+    assert_eq!(s.doc().unwrap().header.str("VNC_CRS", ""), "VN2000 107.75 3");
+}

@@ -7,6 +7,7 @@ mod dxf_dyn;
 mod dxf_ext;
 mod dxf_read;
 mod dxf_write;
+pub mod kml;
 pub mod pdf;
 pub mod raster;
 pub mod svg;

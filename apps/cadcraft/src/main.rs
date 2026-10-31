@@ -61,9 +61,10 @@ fn services() -> Services {
                     "Tất cả VNCCad mở được",
                     &[
                         "dxf", "dwg", "vnss", "lsp", "fas", "vlx", "dcl", "sld", "scr", "shx", "ctb", "ttf", "ttc", "otf", "png", "jpg", "jpeg",
-                        "bmp", "tif", "tiff", "pdf",
+                        "bmp", "tif", "tiff", "pdf", "kml", "kmz",
                     ],
                 )
+                .add_filter("Google Earth (KML, KMZ)", &["kml", "kmz"])
                 .add_filter("Font SHX", &["shx"])
                 .add_filter("AutoLISP, DCL, Script", &["lsp", "fas", "vlx", "dcl", "sld", "scr"])
                 .add_filter("Dữ liệu cho LISP (TXT, CSV)", &["txt", "csv", "dat", "xyz", "tsv"])
@@ -74,9 +75,15 @@ fn services() -> Services {
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_save: Some(Box::new(|name: &str| {
-            rfd::FileDialog::new()
-                .set_file_name(name)
-                .add_filter("Drawing (DXF)", &["dxf"])
+            // VNCCad: the file type being saved is offered first (KMZ / KML exports).
+            let lower = name.to_ascii_lowercase();
+            let mut dlg = rfd::FileDialog::new().set_file_name(name);
+            if lower.ends_with(".kmz") {
+                dlg = dlg.add_filter("Google Earth (KMZ)", &["kmz"]);
+            } else if lower.ends_with(".kml") {
+                dlg = dlg.add_filter("Google Earth (KML)", &["kml"]);
+            }
+            dlg.add_filter("Drawing (DXF)", &["dxf"])
                 .add_filter("Drawing (DWG)", &["dwg"])
                 .add_filter("PDF", &["pdf"])
                 .add_filter("SVG", &["svg"])

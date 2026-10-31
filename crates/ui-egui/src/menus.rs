@@ -110,6 +110,31 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
             }
             Ok(Value::Null)
         }
+        // VNCCad: bytes made by a command (EXPORTKMZ): a download on the web, a save dialog on
+        // the desktop.
+        "ui.savebytes" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("export.bin").to_string();
+            let bytes = params.get("data").and_then(Value::as_str).and_then(cadcraft_engine::cmd::file::base64_decode).unwrap_or_default();
+            let msg = params.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+            if app.services.pick_save.is_none() {
+                if let Some(dl) = app.services.download.as_ref() {
+                    dl(&name, &bytes);
+                    app.session.echo(msg);
+                }
+                return Some(Ok(Value::Null));
+            }
+            if let Some(path) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
+                #[cfg(not(target_arch = "wasm32"))]
+                match std::fs::write(&path, &bytes) {
+                    Ok(()) => app.session.echo(format!("{msg} Tệp: {path}")),
+                    Err(e) => app.session.echo(format!("Không ghi được {path}: {e}")),
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = path;
+            }
+            Ok(Value::Null)
+        }
+        "importkml" if no_path => run_ui_command(app, "ui.open", &Value::Null).unwrap_or(Ok(Value::Null)),
         "ui.open" | "open" if no_path => {
             if let Some(req) = app.services.request_open.as_ref() {
                 req();
