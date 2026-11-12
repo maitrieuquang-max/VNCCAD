@@ -189,6 +189,16 @@ trunk serve                  # chạy thử tại http://127.0.0.1:8771
 
 Đẩy một tag `v…`, hoặc một commit lên `main` có dòng `[release v0.9.2-beta.1]` trong nội dung: CI build xong sẽ tạo một **Release** trên GitHub gồm gói Windows, Linux, web và bộ test (`packaging/testkit`: hướng dẫn HTML, phiếu test Excel, bản vẽ/lisp/CSV mẫu). Kịch bản test nằm trong `packaging/testkit/scenarios.json`; bản vẽ mẫu tạo lại bằng `cargo test -p cadcraft-engine --lib make_testkit_drawing -- --ignored`.
 
+## Thay đổi ở v0.9.2-beta.3 (sau đợt test thứ hai)
+
+- Bắt điểm/chọn nhạy hơn; rê lên đường tròn hiện tâm; pickbox cho TRIM/EXTEND/OFFSET/FILLET/BREAK/JOIN; HATCH kết thúc bằng Space/Esc vẫn giữ hatch.
+- Lệnh tắt (REC, AR, LE, MO…), gõ thiếu tên tự hoàn thành, nhận cả khi Telex đang bật; gợi ý lệnh trong ALIASEDIT.
+- Dynamic Input: RECTANG nhập Dài/Rộng, LINE nhập Khoảng cách/Góc, Tab chuyển ô; TK + menu Shift+chuột phải; Object Snap Tracking (F11).
+- Sửa chữ tại chỗ (TEXT/MTEXT/MLEADER), gõ thẳng vào ô bảng; MLEADER chỉnh cỡ mũi tên/tỉ lệ, MLEADERSTYLE; tạo kiểu chữ/kích thước một lần bấm.
+- Layout có sẵn hiện đúng nội dung; mở bản vẽ đúng vùng đã lưu; khung MView: bảng thông số, VPLOCK, VPSCALE, kích đúp vào khung chắc chắn; dựng layout lớn nhanh hơn ~40 lần.
+- PURGE và OPTIONS có hộp thoại; diện tích Hatch/Pline trong Properties; nhóm Layers/Dimension/Utilities trên Tool Sets.
+- Google Earth: GEOCRS (VN-2000 theo tỉnh, UTM), EXPORTKMZ/EXPORTKML, IMPORTKML.
+
 ## Thay đổi ở v0.9.2-beta.2 (sau đợt test đầu)
 
 - Click, quét chọn: tác dụng ngay khi nhấn chuột (một lần là được), kéo-thả để quét khung; quét cắt (crossing) không còn kéo theo kích thước bên cạnh.
